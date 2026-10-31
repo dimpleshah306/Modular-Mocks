@@ -452,7 +452,8 @@ function shell(body, title="Universal Education IELTS", sub="Testing Platform"){
       </div>
       <button class="ue-mobile-scrim" type="button" onclick="document.body.classList.remove('ue-mobile-nav-open')" aria-label="Close menu"></button>
     </div>`;
-  try{if(localStorage.getItem("ue_v16_sidebar_collapsed")==="1")document.body.classList.add("ue-sidebar-collapsed")}catch(e){}
+  /* Sidebar opens expanded by default so every admin option is readable. */
+  document.body.classList.remove("ue-sidebar-collapsed");
 }
 function messageBox(msg,type="notice"){return `<div class="${type}">${esc(msg)}</div>`}
 
