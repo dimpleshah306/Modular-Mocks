@@ -381,3 +381,13 @@ body{background:var(--ue-bg)}
 @media(max-width:760px){
   .ue-sidebar-collapsed .ue-sidebar{width:285px;flex-basis:285px}
 }
+
+
+/* V16.2 management module controls */
+.management-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0}
+.management-toolbar input{flex:1 1 280px;min-width:220px;max-width:560px}
+.management-toolbar select{min-width:150px}
+.management-toolbar .btn{white-space:nowrap}
+tr[hidden]{display:none!important}
+.management-toolbar input,.management-toolbar select{border:1px solid #dbe3ef;border-radius:10px;padding:11px 13px;background:#fff;color:#253650;font:inherit}
+.management-toolbar input:focus,.management-toolbar select:focus{outline:2px solid #c9d9fb;border-color:#6c91e7}

@@ -349,6 +349,7 @@ function clearExam(id,studentId=null,resultId=null){localStorage.removeItem(exam
 function v16RoleTitle(){
   if(!currentProfile)return "Workspace";
   if(currentProfile.role==="admin")return "Main Admin";
+  if(currentProfile.role==="sub_admin")return "Sub Admin";
   const p=currentProfile.permissions||{};
   return ((p.students&&p.tests&&p.exam_sets)||(p.publish&&p.exam_sets&&p.results))?"Sub Admin":"Faculty";
 }
@@ -511,10 +512,10 @@ async function login(e){
     if(error) throw error;
     const p=await getProfile(data.user.id); if(!p.active) throw new Error("Account inactive.");
     if(loginMode==="student"&&p.role!=="student") throw new Error("Use Student login.");
-    if(loginMode==="staff"&&!['admin','tutor'].includes(p.role)) throw new Error("Use Admin / Sub Admin / Faculty login.");
+    if(loginMode==="staff"&&!['admin','sub_admin','faculty','tutor'].includes(p.role)) throw new Error("Use Admin / Sub Admin / Faculty login.");
     if(p.role!=="student"){
       const {data:permRows}=await sb.from("staff_permissions").select("permissions").eq("user_id",p.id).maybeSingle();
-      p.permissions=permRows?.permissions||{};
+      p.permissions=staffPermissionsToUi(permRows?.permissions||{});
     }
     currentProfile=p; clearRoute(); p.role==="student"?studentDashboard():staffDashboard();
   }catch(err){msg.textContent=err.message;msg.style.color="#dc2626"}finally{btn.disabled=false}
@@ -553,6 +554,34 @@ const STAFF_PERMISSION_LABELS={
   students:"View / Manage Students", tests:"Create / Edit Tests", publish:"Publish / Unpublish Tests", exam_sets:"Manage IELTS Mocks / Assign Students",
   results:"View Module Results", writing:"Writing Faculty Evaluation", speaking:"Speaking Faculty Assessment", overall:"View / Manage Overall Results", practice:"Manage Practice Library", assign_practice:"Assign Practice to Students"
 };
+const STAFF_PERMISSION_BACKEND_MAP={
+  students:["students.manage"],
+  tests:["tests.manage"],
+  publish:["tests.publish"],
+  exam_sets:["exam_sets.manage"],
+  results:["results.view"],
+  writing:["writing.review"],
+  speaking:["speaking.review"],
+  overall:["results.manage"],
+  practice:["practice.manage"],
+  assign_practice:["practice.assign"]
+};
+function staffPermissionsToUi(raw={}){
+  const out={...(raw||{})};
+  for(const [ui,keys] of Object.entries(STAFF_PERMISSION_BACKEND_MAP))out[ui]=keys.some(k=>raw?.[k]===true)||raw?.[ui]===true;
+  if(raw?.["answer_keys.manage"]===true)out.publish=true;
+  if(raw?.["tests.manage"]===true&&raw?.["exam_sets.manage"]===undefined)out.exam_sets=true;
+  if(raw?.["staff.manage"]===true)out.staff_management=true;
+  return out;
+}
+function staffPermissionsToBackend(raw={}){
+  const out={};
+  for(const [ui,keys] of Object.entries(STAFF_PERMISSION_BACKEND_MAP)){
+    if(raw?.[ui]===true)for(const key of keys)out[key]=true;
+  }
+  if(raw?.staff_management===true)out["staff.manage"]=true;
+  return out;
+}
 function isMainAdmin(){return currentProfile?.role==='admin'}
 function canStaff(permission){return isMainAdmin() || !!currentProfile?.permissions?.[permission]}
 function guardStaff(permission){if(!canStaff(permission)){alert('You do not have permission for this section. Please contact the Main Admin.');return false}return true}
@@ -576,44 +605,64 @@ async function staffAdminApi(payload){
   const {data,error}=await sb.functions.invoke('staff-admin',{body:payload});
   if(error)throw error; if(!data?.success)throw new Error(data?.error||'Staff management request failed.'); return data;
 }
+
+function filterManagementRows(inputId,tableId){
+  const q=String($(inputId)?.value||'').trim().toLowerCase();
+  document.querySelectorAll(`#${tableId} tbody tr[data-search]`).forEach(row=>{row.hidden=!!q&&!row.dataset.search.includes(q)});
+}
+function exportManagementCsv(filename,headers,rows){
+  const cell=v=>`"${String(v??'').replace(/"/g,'""')}"`;
+  const csv=[headers,...rows].map(r=>r.map(cell).join(',')).join('\r\n');
+  const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=filename;
+  document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+}
+function exportManagementTableCsv(tableId,filename){
+  const table=$(tableId);if(!table)return;
+  const rows=[...table.querySelectorAll('tr')].filter(r=>!r.hidden).map(r=>[...r.querySelectorAll('th,td')].slice(0,-1).map(c=>c.innerText.trim()));
+  const csv=rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\\r\\n');
+  const blob=new Blob(['\\ufeff'+csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=filename;
+  document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+}
 async function staffManagementPage(){
-  if(!guardStaff('staff_management') && !isMainAdmin())return;
+  if(!isMainAdmin())return alert('Only Main Admin can manage staff accounts.');
   try{
     setRoute('staff-management');
-    const {data,error}=await sb.from('profiles').select('id,full_name,username,role,active,created_at').in('role',['admin','tutor']).order('created_at',{ascending:true});
+    const {data,error}=await sb.from('profiles').select('id,full_name,username,role,active,created_at').in('role',['admin','sub_admin','faculty','tutor']).order('created_at',{ascending:true});
     if(error)throw error;
     const rows=[];
     for(const u of (data||[])){
       const {data:pr}=await sb.from('staff_permissions').select('permissions').eq('user_id',u.id).maybeSingle();
-      const perms=pr?.permissions||{};
+      const perms=staffPermissionsToUi(pr?.permissions||{});
       const pnames=isMainAdmin()&&u.role==='admin'?'All permissions':Object.entries(STAFF_PERMISSION_LABELS).filter(([k])=>perms[k]).map(([,v])=>v).join(', ')||'No permissions';
-      rows.push(`<tr><td><strong>${esc(u.full_name||'')}</strong><br><small>@${esc(u.username||'')}</small></td><td>${u.role==='admin'?'Main Admin':'Sub Admin'}</td><td>${u.active?'Active':'Inactive'}</td><td><small>${esc(pnames)}</small></td><td><div class="actions">${u.role==='admin'?'<span class="muted">Protected</span>':`<button class="btn secondary" onclick="editSubAdmin('${u.id}')">Edit</button><button class="btn ${u.active?'warning':'success'}" onclick="toggleSubAdmin('${u.id}',${!u.active})">${u.active?'Deactivate':'Activate'}</button><button class="btn danger" onclick="deleteSubAdmin('${u.id}','${attr(u.full_name||u.username||'')}')">Delete</button>`}</div></td></tr>`);
+      rows.push(`<tr data-search="${attr([u.full_name,u.username,u.role,u.active?'active':'inactive',pnames].join(' ').toLowerCase())}"><td><strong>${esc(u.full_name||'')}</strong><br><small>@${esc(u.username||'')}</small></td><td>${u.role==='admin'?'Main Admin':u.role==='faculty'?'Faculty':'Sub Admin'}</td><td>${u.active?'Active':'Inactive'}</td><td><small>${esc(pnames)}</small></td><td><div class="actions">${u.role==='admin'?'<span class="muted">Protected</span>':`<button class="btn secondary" onclick="editSubAdmin('${u.id}')">Edit</button><button class="btn ${u.active?'warning':'success'}" onclick="toggleSubAdmin('${u.id}',${!u.active})">${u.active?'Deactivate':'Activate'}</button><button class="btn danger" onclick="deleteSubAdmin('${u.id}','${attr(u.full_name||u.username||'')}')">Delete</button>`}</div></td></tr>`);
     }
-    shell(`<div class="actions"><button class="btn secondary" onclick="staffDashboard()">← Dashboard</button><button class="btn primary" onclick="newSubAdminForm()">+ Create Sub Admin</button></div><h2>Staff / Sub Admin Management</h2><p class="muted">Main Admin has full control. Sub Admins can be given individual permissions.</p><div class="card table-wrap"><table><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Permissions</th><th>Actions</th></tr></thead><tbody>${rows.join('')||'<tr><td colspan="5">No staff accounts.</td></tr>'}</tbody></table></div>`);
+    shell(`<div class="actions"><button class="btn secondary" onclick="staffDashboard()">← Dashboard</button><button class="btn primary" onclick="newSubAdminForm()">+ Create Staff</button></div><h2>Staff / Sub Admin Management</h2><p class="muted">Main Admin has full control. Sub Admins can be given individual permissions.</p><div class="management-toolbar"><input id="staffSearch" placeholder="Search name, username, role or permission..." oninput="filterManagementRows('staffSearch','staffTable')"><button class="btn secondary" onclick="exportManagementTableCsv('staffTable','universal-education-staff.csv')">Export CSV</button></div><div class="card table-wrap"><table id="staffTable"><thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Permissions</th><th>Actions</th></tr></thead><tbody>${rows.join('')||'<tr><td colspan="5">No staff accounts.</td></tr>'}</tbody></table></div>`);
   }catch(e){alert('Could not load staff: '+(e.message||e))}
 }
 function permissionChecksHtml(selected={}){return Object.entries(STAFF_PERMISSION_LABELS).map(([k,v])=>`<label class="checkline"><input type="checkbox" class="staff-perm" value="${k}" ${selected[k]?'checked':''}> ${esc(v)}</label>`).join('')}
 function collectStaffPermissions(){const o={};document.querySelectorAll('.staff-perm:checked').forEach(x=>o[x.value]=true);return o}
 function newSubAdminForm(){
   if(!isMainAdmin())return alert('Only the Main Admin can create Sub Admins.');
-  shell(`<div class="actions"><button class="btn secondary" onclick="staffManagementPage()">← Staff</button></div><h2>Create Sub Admin</h2><div class="card"><div class="grid"><div><label>Full Name</label><input id="saName"></div><div><label>Username</label><input id="saUsername" autocomplete="username" placeholder="e.g. rahul"></div></div><div class="grid"><div><label>Password</label><input id="saPass" type="password" autocomplete="new-password"></div><div><label>Confirm Password</label><input id="saPass2" type="password" autocomplete="new-password"></div></div><h3>Permissions</h3><div class="permission-grid">${permissionChecksHtml()}</div><div class="actions"><button class="btn primary" onclick="createSubAdmin()">Create Sub Admin</button></div></div>`);
+  shell(`<div class="actions"><button class="btn secondary" onclick="staffManagementPage()">← Staff</button></div><h2>Create Staff Account</h2><div class="card"><div class="grid"><div><label>Full Name</label><input id="saName"></div><div><label>Username</label><input id="saUsername" autocomplete="username" placeholder="e.g. rahul"></div><div><label>Account Role</label><select id="saRole"><option value="sub_admin">Sub Admin</option><option value="faculty">Faculty</option></select></div></div><div class="grid"><div><label>Password</label><input id="saPass" type="password" autocomplete="new-password"></div><div><label>Confirm Password</label><input id="saPass2" type="password" autocomplete="new-password"></div></div><h3>Permissions</h3><div class="permission-grid">${permissionChecksHtml()}</div><div class="actions"><button class="btn primary" onclick="createSubAdmin()">Create Sub Admin</button></div></div>`);
 }
 async function createSubAdmin(){
   const name=$("saName").value.trim(),username=normalizeStaffUsername($("saUsername").value),pass=$("saPass").value,pass2=$("saPass2").value;
-  if(!name||!username)return alert('Enter name and username.'); if(!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username))return alert('Username may contain only letters, numbers, dot, underscore or hyphen.'); if(pass.length<6)return alert('Password must be at least 6 characters.'); if(pass!==pass2)return alert('Passwords do not match.');
-  try{await staffAdminApi({action:'create',full_name:name,username,password:pass,permissions:collectStaffPermissions()});alert('Sub Admin created successfully.');staffManagementPage()}catch(e){alert('Could not create Sub Admin: '+(e.message||e))}
+  if(!name||!username)return alert('Enter name and username.'); if(!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username))return alert('Username may contain only letters, numbers, dot, underscore or hyphen.'); if(pass.length<8)return alert('Password must be at least 8 characters.'); if(pass!==pass2)return alert('Passwords do not match.');
+  try{const role=$('saRole')?.value||'sub_admin';await staffAdminApi({action:'create',role,full_name:name,username,password:pass,permissions:staffPermissionsToBackend(collectStaffPermissions())});alert(`${role==='faculty'?'Faculty':'Sub Admin'} created successfully.`);staffManagementPage()}catch(e){alert('Could not create Sub Admin: '+(e.message||e))}
 }
 async function editSubAdmin(id){
   if(!isMainAdmin())return alert('Only the Main Admin can edit Sub Admins.');
-  const {data:u,error}=await sb.from('profiles').select('id,full_name,username,active').eq('id',id).single();if(error)return alert(error.message);
+  const {data:u,error}=await sb.from('profiles').select('id,full_name,username,role,active').eq('id',id).single();if(error)return alert(error.message);
   const {data:pr}=await sb.from('staff_permissions').select('permissions').eq('user_id',id).maybeSingle();
-  shell(`<div class="actions"><button class="btn secondary" onclick="staffManagementPage()">← Staff</button></div><h2>Edit Sub Admin</h2><div class="card"><div class="grid"><div><label>Full Name</label><input id="saName" value="${attr(u.full_name||'')}"></div><div><label>Username</label><input id="saUsername" value="${attr(u.username||'')}" autocomplete="username"></div></div><label>New Password (optional)</label><input id="saPass" type="password" placeholder="Leave blank to keep current password"><h3>Permissions</h3><div class="permission-grid">${permissionChecksHtml(pr?.permissions||{})}</div><div class="actions"><button class="btn primary" onclick="saveSubAdmin('${id}')">Save Sub Admin</button></div></div>`);
+  shell(`<div class="actions"><button class="btn secondary" onclick="staffManagementPage()">← Staff</button></div><h2>Edit Sub Admin</h2><div class="card"><div class="grid"><div><label>Full Name</label><input id="saName" value="${attr(u.full_name||'')}"></div><div><label>Username</label><input id="saUsername" value="${attr(u.username||'')}" autocomplete="username"></div></div><label>Account Role</label><select id="saRole"><option value="sub_admin" ${u.role==='sub_admin'?'selected':''}>Sub Admin</option><option value="faculty" ${u.role==='faculty'?'selected':''}>Faculty</option></select><label>New Password (optional)</label><input id="saPass" type="password" placeholder="Leave blank to keep current password"><h3>Permissions</h3><div class="permission-grid">${permissionChecksHtml(staffPermissionsToUi(pr?.permissions||{}))}</div><div class="actions"><button class="btn primary" onclick="saveSubAdmin('${id}')">Save Sub Admin</button></div></div>`);
 }
 async function saveSubAdmin(id){
-  const name=$("saName").value.trim(),username=normalizeStaffUsername($("saUsername").value),pass=$("saPass").value; if(!name||!username)return alert('Enter name and username.'); if(!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username))return alert('Username may contain only letters, numbers, dot, underscore or hyphen.'); if(pass&&pass.length<6)return alert('Password must be at least 6 characters.');
-  try{await staffAdminApi({action:'update',id,full_name:name,username,permissions:collectStaffPermissions(),...(pass?{password:pass}:{})});alert('Sub Admin updated.');staffManagementPage()}catch(e){alert('Could not update Sub Admin: '+(e.message||e))}
+  const name=$("saName").value.trim(),username=normalizeStaffUsername($("saUsername").value),pass=$("saPass").value; if(!name||!username)return alert('Enter name and username.'); if(!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username))return alert('Username may contain only letters, numbers, dot, underscore or hyphen.'); if(pass&&pass.length<8)return alert('Password must be at least 8 characters.');
+  try{await staffAdminApi({action:'update',id,role:$('saRole').value,full_name:name,username,permissions:staffPermissionsToBackend(collectStaffPermissions()),...(pass?{password:pass}:{})});alert('Sub Admin updated.');staffManagementPage()}catch(e){alert('Could not update Sub Admin: '+(e.message||e))}
 }
-async function toggleSubAdmin(id,active){if(!isMainAdmin())return alert('Only the Main Admin can activate/deactivate Sub Admins.');try{await staffAdminApi({action:'toggle',id,active});staffManagementPage()}catch(e){alert('Could not update status: '+(e.message||e))}}
+async function toggleSubAdmin(id,active){if(!isMainAdmin())return alert('Only the Main Admin can activate/deactivate Sub Admins.');try{await staffAdminApi({action:'status',id,active});staffManagementPage()}catch(e){alert('Could not update status: '+(e.message||e))}}
 async function deleteSubAdmin(id,name){if(!isMainAdmin())return alert('Only the Main Admin can delete Sub Admins.');if(!confirm(`Delete Sub Admin ${name}? This will remove the login account.`))return;try{await staffAdminApi({action:'delete',id});alert('Sub Admin deleted.');staffManagementPage()}catch(e){alert('Could not delete Sub Admin: '+(e.message||e))}}
 
 async function logout(){stopStudentListeningAudio();clearRoute();if(exam)clearExam(exam.testId,exam.studentId,exam.resultId);exam=null;currentProfile=null;await sb.auth.signOut();location.reload()}
@@ -662,16 +711,15 @@ async function staffDashboard(){
 async function studentsPage(){
   if(!guardStaff('students'))return;
   setRoute("students");
-  const {data,error}=await sb.from("profiles").select("id,student_code,full_name,role,active,created_at").eq("role","student").order("created_at",{ascending:false});
-  if(error)return alert(error.message);
-  const {data:tests,tError}=await sb.from("tests").select("id,title,module,is_published").order("created_at",{ascending:false});
-  if(tError)return alert(tError.message);
-  const rows=(data||[]).map(s=>`<tr><td><strong>${esc(s.student_code||"—")}</strong></td><td>${esc(s.full_name||"")}</td><td>${s.active?"Active":"Inactive"}</td><td>${new Date(s.created_at).toLocaleDateString()}</td><td><div class="actions"><button class="btn secondary" onclick="manageStudent('${s.id}')">Manage</button><button class="btn ${s.active?'warning':'success'}" onclick="toggleStudent('${s.id}',${!s.active})">${s.active?'Deactivate':'Activate'}</button><button class="btn danger" onclick="deleteStudent('${s.id}','${attr(s.student_code||"")}')">Delete</button></div></td></tr>`).join("")||`<tr><td colspan="5">No students.</td></tr>`;
+  let data=[];
+  try{const result=await edgeStudentAdmin({action:"list"});data=result.students||[]}catch(e){return alert("Could not load students: "+(e.message||e))}
+  const rows=(data||[]).map(s=>`<tr data-search="${attr([s.student_code,s.full_name,s.active?'active':'inactive'].join(' ').toLowerCase())}"><td><strong>${esc(s.student_code||"—")}</strong></td><td>${esc(s.full_name||"")}</td><td>${s.active?"Active":"Inactive"}</td><td>${new Date(s.created_at).toLocaleDateString()}</td><td><div class="actions"><button class="btn secondary" onclick="manageStudent('${s.id}')">Manage</button><button class="btn ${s.active?'warning':'success'}" onclick="toggleStudent('${s.id}',${!s.active})">${s.active?'Deactivate':'Activate'}</button><button class="btn danger" onclick="deleteStudent('${s.id}','${attr(s.student_code||"")}')">Delete</button></div></td></tr>`).join("")||`<tr><td colspan="5">No students.</td></tr>`;
   shell(`<div class="actions"><button class="btn secondary" onclick="staffDashboard()">← Dashboard</button><button class="btn primary" onclick="newStudentForm()">+ Create Student</button></div>
   <h2>Student Management</h2><p class="muted">Students login with Student ID + Password. Email is not required for students.</p>
-  <div class="card"><div class="table-wrap"><table><thead><tr><th>Student ID</th><th>Name</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></div>`);
+  <div class="management-toolbar"><input id="studentSearch" placeholder="Search Student ID, name or status..." oninput="filterManagementRows('studentSearch','studentsTable')"><button class="btn secondary" onclick="exportManagementTableCsv('studentsTable','universal-education-students.csv')">Export CSV</button></div><div class="card"><div class="table-wrap"><table id="studentsTable"><thead><tr><th>Student ID</th><th>Name</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></div>`);
 }
 function newStudentForm(){
+  if(!guardStaff('students'))return;
   shell(`<div class="actions"><button class="btn secondary" onclick="studentsPage()">← Students</button></div><h2>Create Student</h2><div class="card">
   <label>Student ID</label><input id="stCode" placeholder="e.g. STU001" autocomplete="off">
   <label>Student Name</label><input id="stName" placeholder="Student full name">
@@ -681,26 +729,33 @@ function newStudentForm(){
   <div class="actions"><button class="btn primary" onclick="createStudent()">Create Student</button></div><div id="studentCreateMsg"></div></div>`);
 }
 async function createStudent(){
+  if(!guardStaff('students'))return;
   const code=normalizeStudentId($("stCode").value), name=$("stName").value.trim(), pass=$("stPass").value, pass2=$("stPass2").value;
   if(!/^[a-z0-9][a-z0-9._-]{2,49}$/.test(code))return alert("Student ID must be 3-50 characters: letters, numbers, dot, underscore or hyphen.");
-  if(!name)return alert("Enter student name."); if(pass.length<6)return alert("Password must be at least 6 characters."); if(pass!==pass2)return alert("Passwords do not match.");
+  if(!name)return alert("Enter student name."); if(pass.length<8)return alert("Password must be at least 8 characters."); if(pass!==pass2)return alert("Passwords do not match.");
   try{await edgeStudentAdmin({action:"create",student_code:code,full_name:name,password:pass});alert("Student created successfully.");studentsPage()}catch(e){alert(e.message)}
 }
 async function manageStudent(id){
-  const {data:s,error}=await sb.from("profiles").select("id,student_code,full_name,active").eq("id",id).single(); if(error)return alert(error.message);
-  const {data:tests,error:te}=await sb.from("tests").select("id,title,module,is_published").order("created_at",{ascending:false}); if(te)return alert(te.message);
-  const {data:access,error:ae}=await sb.from("student_test_access").select("test_id,allowed").eq("student_id",id); if(ae)return alert(ae.message);
-  const amap=new Map((access||[]).map(x=>[x.test_id,!!x.allowed]));
+  if(!guardStaff('students'))return;
+  let student,tests=[],access=[];
+  try{
+    const result=await edgeStudentAdmin({action:"get",id});student=result.student;
+    if(canStaff("tests")){
+      const [t,a]=await Promise.all([edgeStudentAdmin({action:"list_tests"}),edgeStudentAdmin({action:"get_test_access",id})]);
+      tests=t.tests||[];access=a.access||[];
+    }
+  }catch(e){return alert("Could not load student details: "+(e.message||e))}
+  const s=student,amap=new Map((access||[]).map(x=>[x.test_id,!!x.allowed]));
   shell(`<div class="actions"><button class="btn secondary" onclick="studentsPage()">← Students</button></div><h2>Manage Student</h2><div class="card">
-    <div class="grid"><div><label>Student ID</label><input id="msCode" value="${attr(s.student_code||"")}" ${s.student_code?'disabled':''} placeholder="e.g. STU001"></div><div><label>Student Name</label><input id="msName" value="${attr(s.full_name||"")}"></div></div>
+    <div class="grid"><div><label>Student ID</label><input id="msCode" value="${attr(s.student_code||"")}" placeholder="e.g. STU001"></div><div><label>Student Name</label><input id="msName" value="${attr(s.full_name||"")}"></div></div>
     <label>New Password (optional)</label><input id="msPass" type="password" placeholder="Leave blank to keep current password">
     <div class="actions" style="margin-top:12px"><button class="btn primary" onclick="saveStudent('${s.id}')">Save Student</button><button class="btn ${s.active?'warning':'success'}" onclick="toggleStudent('${s.id}',${!s.active})">${s.active?'Deactivate':'Activate'}</button></div>
-  </div><div class="card"><h3>Assign Tests</h3><p class="muted">Only assigned + published tests can be taken by this student.</p><div class="grid3">${(tests||[]).map(t=>`<label style="display:flex;gap:8px;align-items:center;font-weight:600"><input type="checkbox" style="width:auto" id="access-${t.id}" ${amap.get(t.id)?"checked":""} onchange="setTestAccess('${id}','${t.id}',this.checked)"><span>${esc(t.title)} <small class="muted">(${esc(t.module)})</small></span></label>`).join("")||"No tests created yet."}</div></div>`);
+  </div>${canStaff("tests")?`<div class="card"><h3>Assign Tests</h3><p class="muted">Only assigned + published tests can be taken by this student.</p><div class="grid3">${(tests||[]).map(t=>`<label style="display:flex;gap:8px;align-items:center;font-weight:600"><input type="checkbox" style="width:auto" id="access-${t.id}" ${amap.get(t.id)?"checked":""} onchange="setTestAccess('${id}','${t.id}',this.checked)"><span>${esc(t.title)} <small class="muted">(${esc(t.module)})</small></span></label>`).join("")||"No tests created yet."}</div></div>`:''}`);
 }
-async function saveStudent(id){const name=$("msName").value.trim(),code=normalizeStudentId($("msCode").value),pass=$("msPass").value;try{await edgeStudentAdmin({action:"update",id,full_name:name,student_code:code});if(pass){if(pass.length<6)throw new Error("Password must be at least 6 characters.");await edgeStudentAdmin({action:"reset_password",id,password:pass})}alert("Student updated.");manageStudent(id)}catch(e){alert(e.message)}}
-async function toggleStudent(id,active){try{await edgeStudentAdmin({action:"update",id,active});studentsPage()}catch(e){alert(e.message)}}
-async function setTestAccess(studentId,testId,allowed){const {error}=await sb.from("student_test_access").upsert({student_id:studentId,test_id:testId,allowed},{onConflict:"student_id,test_id"});if(error)alert(error.message)}
-async function deleteStudent(id,code){if(!confirm(`Delete Student ${code}? This permanently deletes the student account, assigned tests, attempts, answers and results.`))return;try{await edgeStudentAdmin({action:"delete",id});alert("Student and associated data deleted.");studentsPage()}catch(e){alert(e.message)}}
+async function saveStudent(id){if(!guardStaff('students'))return;const name=$("msName").value.trim(),code=normalizeStudentId($("msCode").value),pass=$("msPass").value;try{await edgeStudentAdmin({action:"update",id,full_name:name,student_code:code});if(pass){if(pass.length<8)throw new Error("Password must be at least 8 characters.");await edgeStudentAdmin({action:"reset_password",id,password:pass})}alert("Student updated.");manageStudent(id)}catch(e){alert(e.message)}}
+async function toggleStudent(id,active){if(!guardStaff('students'))return;try{await edgeStudentAdmin({action:"update",id,active});studentsPage()}catch(e){alert(e.message)}}
+async function setTestAccess(studentId,testId,allowed){if(!guardStaff('tests'))return;try{await edgeStudentAdmin({action:"set_test_access",student_id:studentId,test_id:testId,allowed})}catch(e){alert(e.message||e)}}
+async function deleteStudent(id,code){if(!guardStaff('students'))return;if(!confirm(`Delete Student ${code}? This permanently deletes the student account, assigned tests, attempts, answers and results.`))return;try{await edgeStudentAdmin({action:"delete",id});alert("Student and associated data deleted.");studentsPage()}catch(e){alert(e.message)}}
 
 async function testsPage(module="all"){
   setRoute("tests",{module});
@@ -715,6 +770,7 @@ async function testsPage(module="all"){
   <button class="btn danger" onclick="deleteTest('${t.id}')">Delete</button></div></td></tr>`).join("")||`<tr><td colspan="5">No tests.</td></tr>`}</tbody></table></div>`);
 }
 async function answerKeyPage(testId){
+  if(!guardStaff('tests'))return;
   try{
     const d=await loadTestBundle(testId),t=d.test,mod=normalizeModule(t.module);
     if(mod==="writing"){
@@ -791,16 +847,18 @@ function newTestForm(module="all"){
 }
 function syncNewTestDefaults(){const m=$("ntModule").value;$("ntDur").value=m==="listening"?40:m==="speaking"?0:60;$("ntTotal").value=m==="writing"?2:m==="speaking"?0:40;$("ntDur").disabled=m==="speaking";$("ntTotal").disabled=m==="speaking"}
 async function createTest(){
+  if(!guardStaff('tests'))return;
   try{
     const uid=(await sb.auth.getUser()).data.user.id,m=$("ntModule").value;
     const settings={...(m==="reading"?{reading_type:$("ntReadingType")?.value||"academic"}:{}),overall_group:$("ntOverallGroup")?.value.trim()||$("ntTitle").value.trim()};
     const {data:t,error}=await sb.from("tests").insert({title:$("ntTitle").value.trim(),module:m,description:$("ntDesc").value.trim(),duration_minutes:+$("ntDur").value,total_questions:+$("ntTotal").value,is_published:false,created_by:uid,settings}).select().single();if(error)throw error;
     const count=m==="listening"?4:m==="reading"?3:1;
-    const rows=Array.from({length:count},(_,i)=>({test_id:t.id,section_number:i+1,title:m==="listening"?`Part ${i+1}`:m==="reading"?`Passage ${i+1}`:m==="writing"?"Writing Tasks":"Speaking Assessment",instructions:"",content:""}));
+    const rows=Array.from({length:count},(_,i)=>({test_id:t.id,section_number:i+1,title:m==="listening"?`Section ${i+1}`:m==="reading"?`Passage ${i+1}`:m==="writing"?"Writing Tasks":"Speaking Assessment",instructions:"",content:""}));
     const {error:e2}=await sb.from("sections").insert(rows);if(e2)throw e2;openBuilder(t.id);
   }catch(e){alert(e.message)}
 }
 async function togglePublish(id,val){
+  if(!guardStaff('publish'))return;
   try{
     if(val){
       const issues=await validateTest(id); if(issues.length)return alert("Cannot publish yet:\n\n"+issues.join("\n"));
@@ -810,12 +868,24 @@ async function togglePublish(id,val){
   }catch(e){alert(e.message)}
 }
 async function deleteTest(id){
-  if(!confirm("Delete this test and its questions?"))return;
-  const {error}=await sb.from("tests").delete().eq("id",id); if(error)alert(error.message); else testsPage("all");
+  if(!guardStaff('tests'))return;
+  if(!confirm("Delete this test and its questions? This is allowed only when it is not linked to a Mock or existing student attempt."))return;
+  try{
+    const [linked,attempts,access]=await Promise.all([
+      sb.from("exam_set_modules").select("exam_set_id").eq("test_id",id).limit(1),
+      sb.from("results").select("id").eq("test_id",id).limit(1),
+      sb.from("student_test_access").select("student_id").eq("test_id",id).limit(1)
+    ]);
+    if(linked.error)throw linked.error;if(attempts.error)throw attempts.error;if(access.error)throw access.error;
+    if(linked.data?.length)throw new Error("This test is linked to an IELTS Mock / Exam Set. Remove it from the Mock first.");
+    if(attempts.data?.length)throw new Error("This test has student attempts/results. Unpublish it instead of deleting it to preserve student history.");
+    if(access.data?.length)throw new Error("This test is assigned directly to students. Remove student access before deleting it.");
+    const {error}=await sb.from("tests").delete().eq("id",id);if(error)throw error;testsPage("all");
+  }catch(e){alert("Could not delete test: "+(e.message||e))}
 }
 async function validateTest(id){
   const d=await loadTestBundle(id),issues=[];
-  if(d.test.module==="listening"&&d.sections.length!==4)issues.push("Listening must have 4 Parts.");
+  if(d.test.module==="listening"&&d.sections.length!==4)issues.push("Listening must have 4 Sections.");
   if(d.test.module==="reading"&&d.sections.length!==3)issues.push("Reading must have 3 Passages.");
   if(d.test.module==="writing"&&d.writingTasks.length<2)issues.push("Writing requires Task 1 and Task 2.");
   if(d.test.module==="speaking"){if(d.sections.length!==1)issues.push("Speaking assessment must have one assessment section.");return issues;}
@@ -880,6 +950,7 @@ async function openBuilder(id,sectionIndex=0,scrollTop=0){
 window.openBuilder=openBuilder;
 
 async function editTest(id){
+  if(!guardStaff('tests'))return;
   return openBuilder(id,0,0);
 }
 window.editTest=editTest;
@@ -2166,6 +2237,7 @@ async function examSetsPage(){
   }catch(e){alert('Could not load Exam Sets: '+(e.message||e))}
 }
 async function newExamSetForm(existingId=null){
+  if(!guardStaff('exam_sets'))return;
   try{
     const es=existingId?await v13GetExamSet(existingId):null;
     const tq=await sb.from('tests').select('id,title,module,is_published').order('created_at',{ascending:false});if(tq.error)throw tq.error;
@@ -2177,6 +2249,7 @@ async function newExamSetForm(existingId=null){
 }
 function v13SelectAllStudents(on){document.querySelectorAll('.esStudent').forEach(x=>x.checked=!!on)}
 async function saveExamSet(id=''){
+  if(!guardStaff('exam_sets'))return;
   try{
     const title=$('esTitle').value.trim(),description=$('esDesc').value.trim();if(!title)throw new Error('Enter an Exam / Mock name.');
     const modules=['listening','reading','writing','speaking'].map(m=>({module:m,test_id:$('esTest_'+m)?.value||null})).filter(x=>x.test_id);
@@ -2194,8 +2267,8 @@ async function saveExamSet(id=''){
   }catch(e){alert('Could not save Exam Set: '+(e.message||e))}
 }
 async function editExamSet(id){return newExamSetForm(id)}
-async function toggleExamSet(id,val){try{if(val){const es=await v13GetExamSet(id);const mods=['listening','reading','writing','speaking'];if(es.modules.length!==4||mods.some(m=>!es.modules.some(x=>x.module===m)))throw new Error('Exam Set must contain exactly one Listening, Reading, Writing and Speaking test before publishing.');if(es.tests.some(t=>!t.is_published))throw new Error('All four module tests must be published before publishing this Exam Set.');}const {error}=await sb.from('exam_sets').update({is_published:val,updated_at:new Date().toISOString()}).eq('id',id);if(error)throw error;examSetsPage()}catch(e){alert('Could not change Exam Set status: '+(e.message||e))}}
-async function deleteExamSet(id){if(!confirm('Delete this Exam Set? Individual test definitions and existing student attempts will NOT be deleted.'))return;const {error}=await sb.from('exam_sets').delete().eq('id',id);if(error)alert(error.message);else examSetsPage()}
+async function toggleExamSet(id,val){if(!guardStaff('exam_sets'))return;try{if(val){const es=await v13GetExamSet(id);const mods=['listening','reading','writing','speaking'];if(es.modules.length!==4||mods.some(m=>!es.modules.some(x=>x.module===m)))throw new Error('Exam Set must contain exactly one Listening, Reading, Writing and Speaking test before publishing.');if(es.tests.some(t=>!t.is_published))throw new Error('All four module tests must be published before publishing this Exam Set.');}const {error}=await sb.from('exam_sets').update({is_published:val,updated_at:new Date().toISOString()}).eq('id',id);if(error)throw error;examSetsPage()}catch(e){alert('Could not change Exam Set status: '+(e.message||e))}}
+async function deleteExamSet(id){if(!guardStaff('exam_sets'))return;if(!confirm('Delete this Exam Set? Individual test definitions and existing student attempts will NOT be deleted.'))return;const {error}=await sb.from('exam_sets').delete().eq('id',id);if(error)alert(error.message);else examSetsPage()}
 
 function v13ExamSetSummary(examSetId,mods,tests,results){
   const tm=new Map(tests.map(t=>[t.id,t]));
@@ -2386,6 +2459,7 @@ async function saveV13SpeakingScore(resultId,testId,studentId,examSetId){try{con
 
 // V13 Listening/Builder defaults and labels.
 function newTestForm(module='all'){
+  if(!guardStaff('tests'))return;
   const m=['listening','reading','writing','speaking'].includes(module)?module:'listening';shell(`<div class="actions"><button class="btn secondary" onclick="testsPage('${module}')">← Back</button></div><h2>Create New Test</h2><div class="card"><div class="grid"><div><label>Title</label><input id="ntTitle" value="${m[0].toUpperCase()+m.slice(1)} Test"></div><div><label>Module</label><select id="ntModule" onchange="syncNewTestDefaults()"><option value="listening" ${m==='listening'?'selected':''}>Listening</option><option value="reading" ${m==='reading'?'selected':''}>Reading</option><option value="writing" ${m==='writing'?'selected':''}>Writing</option><option value="speaking" ${m==='speaking'?'selected':''}>Speaking — Faculty Assessment</option></select></div></div><label>Description</label><textarea id="ntDesc"></textarea><div class="grid"><div><label>Duration</label><input id="ntDur" type="number" value="${m==='listening'?30:m==='speaking'?0:60}" ${m==='speaking'?'disabled':''}></div><div><label>Total Questions</label><input id="ntTotal" type="number" value="${m==='writing'?2:m==='speaking'?0:40}" ${m==='speaking'?'disabled':''}></div></div><div class="notice">Listening uses one continuous audio track for the complete test. Recommended duration: 30 minutes.</div><div class="actions" style="margin-top:14px"><button class="btn primary" onclick="createTest()">Create & Open Builder</button></div></div>`)}
 function syncNewTestDefaults(){const m=$('ntModule').value;$('ntDur').value=m==='listening'?30:m==='speaking'?0:60;$('ntTotal').value=m==='writing'?2:m==='speaking'?0:40;$('ntDur').disabled=m==='speaking';$('ntTotal').disabled=m==='speaking'}
 
@@ -2397,6 +2471,7 @@ function staffDashboard(){setRoute('dashboard');shell(`<h2>Admin Dashboard</h2><
 
 
 async function createTest(){
+  if(!guardStaff('tests'))return;
   try{
     const uid=(await sb.auth.getUser()).data.user?.id;
     if(!uid)throw new Error('Admin session expired.');
@@ -2583,6 +2658,7 @@ async function examSetsPage(){
   }catch(e){alert('Could not load Exam Sets: '+(e.message||e))}
 }
 async function newExamSetForm(existingId=null){
+  if(!guardStaff('exam_sets'))return;
   try{
     const es=existingId?await v13GetExamSet(existingId):null;
     const tq=await sb.from('tests').select('id,title,module,is_published').order('created_at',{ascending:false});if(tq.error)throw tq.error;
@@ -2593,6 +2669,7 @@ async function newExamSetForm(existingId=null){
   }catch(e){alert('Could not open Mock form: '+(e.message||e))}
 }
 async function saveExamSet(id=''){
+  if(!guardStaff('exam_sets'))return;
   try{
     const title=$('esTitle').value.trim(),description=$('esDesc').value.trim();if(!title)throw new Error('Enter a Mock / Exam name.');
     const modules=['listening','reading','writing'].map(m=>({module:m,test_id:$('esTest_'+m)?.value||null}));if(modules.some(x=>!x.test_id))throw new Error('Select exactly one Listening, Reading and Writing test. Speaking is added later by Faculty as a score.');
@@ -2606,7 +2683,7 @@ async function saveExamSet(id=''){
     alert(`Mock ${id?'updated':'created'} successfully.`);examSetsPage();
   }catch(e){alert('Could not save Mock: '+(e.message||e))}
 }
-async function toggleExamSet(id,val){try{if(val){const es=await v13GetExamSet(id);const mods=['listening','reading','writing'];if(mods.some(m=>!es.modules.some(x=>x.module===m)))throw new Error('Mock must contain Listening, Reading and Writing before publishing.');if(es.tests.some(t=>t.module!=='speaking'&&!t.is_published))throw new Error('All three student module tests must be published before publishing this Mock.');}const {error}=await sb.from('exam_sets').update({is_published:val,updated_at:new Date().toISOString()}).eq('id',id);if(error)throw error;examSetsPage()}catch(e){alert('Could not change Mock status: '+(e.message||e))}}
+async function toggleExamSet(id,val){if(!guardStaff('exam_sets'))return;try{if(val){const es=await v13GetExamSet(id);const mods=['listening','reading','writing'];if(mods.some(m=>!es.modules.some(x=>x.module===m)))throw new Error('Mock must contain Listening, Reading and Writing before publishing.');if(es.tests.some(t=>t.module!=='speaking'&&!t.is_published))throw new Error('All three student module tests must be published before publishing this Mock.');}const {error}=await sb.from('exam_sets').update({is_published:val,updated_at:new Date().toISOString()}).eq('id',id);if(error)throw error;examSetsPage()}catch(e){alert('Could not change Mock status: '+(e.message||e))}}
 
 async function studentDashboard(){
   try{
@@ -2726,18 +2803,24 @@ async function resetStudentAccount(id,code){
 // V13.1: Speaking is no longer a student test module.
 // Existing legacy Speaking test definitions are left untouched in the database
 // for safety, but they are hidden from the new Mock workflow.
+function filterTestManagement(){
+  const q=String($('testSearch')?.value||'').trim().toLowerCase(),status=$('testStatusFilter')?.value||'';
+  document.querySelectorAll('#testsTable tbody tr[data-search]').forEach(row=>{row.hidden=(!!q&&!row.dataset.search.includes(q))||(!!status&&!row.dataset.search.includes(status));});
+}
 async function testsPage(module='all'){
-  if(!guardStaff('tests'))return;
+  if(module==='speaking'){if(!guardStaff('speaking'))return;}
+  else if(!guardStaff('tests'))return;
   try{
     setRoute('tests',{module});
     if(module==='speaking'){
       shell(`<div class="actions"><button class="btn secondary" onclick="staffDashboard()">← Dashboard</button></div><h2>🗣️ Speaking — Faculty Assessment</h2><div class="notice"><strong>No Speaking student test is required.</strong><br>For every Mock, Faculty records the student's Speaking band directly from <b>Overall Results → Mock → Speaking Faculty Assessment</b>.</div><div class="card"><h3>How Speaking works</h3><ol><li>Create the Mock with Listening + Reading + Writing.</li><li>Assign the Student ID to the Mock.</li><li>Faculty conducts the Speaking interview separately.</li><li>Faculty enters the Speaking band against that Student + Mock.</li><li>The Overall Band updates automatically.</li></ol></div>`);return;
     }
     let q=sb.from('tests').select('*').neq('module','speaking').order('created_at',{ascending:false});if(module!=='all')q=q.eq('module',module);const {data,error}=await q;if(error)throw error;
-    shell(`<div class="actions"><button class="btn secondary" onclick="staffDashboard()">← Dashboard</button><button class="btn primary" onclick="newTestForm('${module}')">+ Create Test</button></div><h2>${module==='all'?'All Student Tests':module[0].toUpperCase()+module.slice(1)+' Tests'}</h2><p class="muted">Speaking is handled separately as Faculty Assessment and is not created or assigned as a student test.</p><div class="card table-wrap"><table><thead><tr><th>Title</th><th>Module</th><th>Duration</th><th>Status</th><th>Actions</th></tr></thead><tbody>${(data||[]).map(t=>`<tr><td><strong>${esc(t.title)}</strong><br><small>${esc(t.description||'')}</small></td><td>${esc(t.module)}${t.module==='reading'?`<br><small>${getReadingType(t)==='general'?'General Training':'Academic'}</small>`:''}</td><td>${t.duration_minutes} min</td><td><span class="status ${t.is_published?'published':'draft'}">${t.is_published?'Published':'Draft'}</span></td><td><div class="actions"><button class="btn secondary" onclick="editTest('${t.id}')">Edit</button><button class="btn primary" onclick="answerKeyPage('${t.id}')">Answer Key</button><button class="btn ${t.is_published?'warning':'success'}" onclick="togglePublish('${t.id}',${!t.is_published})">${t.is_published?'Unpublish':'Publish'}</button><button class="btn danger" onclick="deleteTest('${t.id}')">Delete</button></div></td></tr>`).join('')||'<tr><td colspan="5">No tests.</td></tr>'}</tbody></table></div>`);
+    shell(`<div class="actions"><button class="btn secondary" onclick="staffDashboard()">← Dashboard</button><button class="btn primary" onclick="newTestForm('${module}')">+ Create Test</button></div><h2>${module==='all'?'All Student Tests':module[0].toUpperCase()+module.slice(1)+' Tests'}</h2><p class="muted">Speaking is handled separately as Faculty Assessment and is not created or assigned as a student test.</p><div class="management-toolbar"><input id="testSearch" placeholder="Search test title, module or status..." oninput="filterTestManagement()"><select id="testStatusFilter" onchange="filterTestManagement()"><option value="">All statuses</option><option value="published">Published</option><option value="draft">Draft</option></select><button class="btn secondary" onclick="exportManagementTableCsv('testsTable','universal-education-tests.csv')">Export CSV</button></div><div class="card table-wrap"><table id="testsTable"><thead><tr><th>Title</th><th>Module</th><th>Duration</th><th>Status</th><th>Actions</th></tr></thead><tbody>${(data||[]).map(t=>`<tr data-search="${attr([t.title,t.description,t.module,t.is_published?'published':'draft'].join(' ').toLowerCase())}"><td><strong>${esc(t.title)}</strong><br><small>${esc(t.description||'')}</small></td><td>${esc(t.module)}${t.module==='reading'?`<br><small>${getReadingType(t)==='general'?'General Training':'Academic'}</small>`:''}</td><td>${t.duration_minutes} min</td><td><span class="status ${t.is_published?'published':'draft'}">${t.is_published?'Published':'Draft'}</span></td><td><div class="actions"><button class="btn secondary" onclick="editTest('${t.id}')">Edit</button><button class="btn primary" onclick="answerKeyPage('${t.id}')">Answer Key</button>${canStaff('publish')?`<button class="btn ${t.is_published?'warning':'success'}" onclick="togglePublish('${t.id}',${!t.is_published})">${t.is_published?'Unpublish':'Publish'}</button>`:''}<button class="btn danger" onclick="deleteTest('${t.id}')">Delete</button></div></td></tr>`).join('')||'<tr><td colspan="5">No tests.</td></tr>'}</tbody></table></div>`);
   }catch(e){alert('Could not load Tests: '+(e.message||e))}
 }
 function newTestForm(module='all'){
+  if(!guardStaff('tests'))return;
   const m=['listening','reading','writing'].includes(module)?module:'listening';
   shell(`<div class="actions"><button class="btn secondary" onclick="testsPage('${module}')">← Back</button></div><h2>Create New ${m[0].toUpperCase()+m.slice(1)} Test</h2><div class="card"><div class="grid"><div><label>Title</label><input id="ntTitle" value="${m[0].toUpperCase()+m.slice(1)} Test"></div><div><label>Module</label><select id="ntModule" onchange="syncNewTestDefaults()"><option value="listening" ${m==='listening'?'selected':''}>Listening</option><option value="reading" ${m==='reading'?'selected':''}>Reading</option><option value="writing" ${m==='writing'?'selected':''}>Writing</option></select></div></div><label>Description</label><textarea id="ntDesc"></textarea><div class="grid"><div><label>Duration</label><input id="ntDur" type="number" value="${m==='listening'?30:60}"></div><div><label>Total Questions</label><input id="ntTotal" type="number" value="${m==='writing'?2:40}"></div></div><div class="notice">Listening uses one continuous audio track for the complete 30-minute test. Speaking is handled by Faculty in each Mock and is not created here.</div><div class="actions" style="margin-top:14px"><button class="btn primary" onclick="createTest()">Create & Open Builder</button></div></div>`);
 }
