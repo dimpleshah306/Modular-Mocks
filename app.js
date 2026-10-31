@@ -834,27 +834,32 @@ async function answerKeyPage(testId){
 }
 async function saveAnswerKey(testId){
   try{
+    if(!guardStaff('tests'))return;
     const d=await loadTestBundle(testId),mod=normalizeModule(d.test.module);
-    if(mod==='writing') return;
+    if(mod==='writing')return;
     const questions=(mod==='listening'?listeningQuestions40(d):readingQuestions40(d));
-    if(!questions.length) throw new Error('No questions configured yet.');
+    if(!questions.length)throw new Error('No questions configured yet.');
+    const updates=[];
     for(const q of questions){
-      const correctEl=$("ak-c-"+q.id);
+      const correctEl=$('ak-c-'+q.id);
       const rawCorrect=correctEl?.multiple?[...correctEl.selectedOptions].map(o=>o.value).join('||'):(correctEl?.value||'').trim();
-      const rawAlt=$("ak-a-"+q.id)?.value||'';
+      const rawAlt=$('ak-a-'+q.id)?.value||'';
       const parts=rawCorrect.split('||').map(x=>x.trim()).filter(Boolean);
       const correct=parts.shift()||'';
       const alts=[...parts,...rawAlt.split(/\n/).map(x=>x.trim()).filter(Boolean)];
       const unique=[...new Set(alts.filter(x=>norm(x)!==norm(correct)))];
-      if(!correct) throw new Error(`Q${q.question_number}: Correct Answer is required.`);
+      if(!correct)throw new Error(`Q${q.question_number}: Correct Answer is required. No answers were changed.`);
       const old=q.question_config||{};
-      const config={...old,acceptedAnswers:unique,wordLimit:Number($("ak-w-"+q.id)?.value||0)||null,caseSensitive:$("ak-case-"+q.id)?.value==='true'};
-      const {error}=await sb.from('questions').update({correct_answer:correct,question_config:config}).eq('id',q.id);
-      if(error) throw error;
+      const config={...old,acceptedAnswers:unique,wordLimit:Number($('ak-w-'+q.id)?.value||0)||null,caseSensitive:$('ak-case-'+q.id)?.value==='true'};
+      updates.push({id:q.id,correct_answer:correct,question_config:config});
+    }
+    for(const u of updates){
+      const {error}=await sb.from('questions').update({correct_answer:u.correct_answer,question_config:u.question_config}).eq('id',u.id);
+      if(error)throw error;
     }
     alert('Answer Key saved successfully. Student scoring will automatically use these Correct + Alternative Answers.');
     await answerKeyPage(testId);
-  }catch(e){alert('Could not save Answer Key: '+e.message)}
+  }catch(e){console.error('Could not save Answer Key:',e);alert('Could not save Answer Key: '+(e.message||e))}
 }
 function newTestForm(module="all"){
   const m=["listening","reading","writing","speaking"].includes(module)?module:"listening";
@@ -2492,24 +2497,55 @@ function staffDashboard(){setRoute('dashboard');shell(`<h2>Admin Dashboard</h2><
 
 
 
+let __ueTestCreateBusy = false;
 async function createTest(){
-  if(!guardStaff('tests'))return;
+  if(!guardStaff('tests') || __ueTestCreateBusy)return;
+  const submitButton=[...document.querySelectorAll('button')].find(b=>/Create & Open Builder/i.test(b.textContent||''));
+  __ueTestCreateBusy=true;
+  if(submitButton){submitButton.disabled=true;submitButton.dataset.originalText=submitButton.textContent;submitButton.textContent='Creating...';}
+  let createdTestId=null;
   try{
-    const uid=(await sb.auth.getUser()).data.user?.id;
-    if(!uid)throw new Error('Admin session expired.');
-    const m=$('ntModule').value;
-    const title=$('ntTitle').value.trim();if(!title)throw new Error('Enter a test title.');
-    const duration=m==='listening'?30:m==='speaking'?0:Number($('ntDur').value||60);
-    const total=m==='writing'?2:m==='speaking'?0:40;
+    const userResult=await sb.auth.getUser();
+    const uid=userResult?.data?.user?.id;
+    if(!uid)throw new Error('Admin session expired. Please login again.');
+    const m=$('ntModule')?.value;
+    if(!['listening','reading','writing'].includes(m))throw new Error('Select Listening, Reading or Writing.');
+    const title=$('ntTitle')?.value?.trim();
+    if(!title)throw new Error('Enter a test title.');
+    const duration=m==='listening'?30:Number($('ntDur')?.value||60);
+    const total=m==='writing'?2:40;
+    if(!Number.isFinite(duration)||duration<=0)throw new Error('Enter a valid test duration.');
     const settings={};
     if(m==='reading')settings.reading_type=$('ntReadingType')?.value||'academic';
-    const {data:t,error}=await sb.from('tests').insert({title,module:m,description:$('ntDesc').value.trim(),duration_minutes:duration,total_questions:total,is_published:false,created_by:uid,settings}).select().single();
+    const {data:t,error}=await sb.from('tests').insert({
+      title,module:m,description:$('ntDesc')?.value?.trim()||'',duration_minutes:duration,
+      total_questions:total,is_published:false,created_by:uid,settings
+    }).select().single();
     if(error)throw error;
+    createdTestId=t.id;
     const count=m==='listening'?4:m==='reading'?3:1;
-    const rows=Array.from({length:count},(_,i)=>({test_id:t.id,section_number:i+1,title:m==='listening'?`Section ${i+1}`:m==='reading'?`Passage ${i+1}`:m==='writing'?'Writing Tasks':'Speaking Assessment',instructions:'',content:''}));
-    const {error:e2}=await sb.from('sections').insert(rows);if(e2)throw e2;
+    const rows=Array.from({length:count},(_,i)=>({
+      test_id:t.id,section_number:i+1,
+      title:m==='listening'?`Section ${i+1}`:m==='reading'?`Passage ${i+1}`:'Writing Tasks',
+      instructions:'',content:''
+    }));
+    const {error:sectionError}=await sb.from('sections').insert(rows);
+    if(sectionError){
+      // Compensate for the non-transactional browser insert: remove only the
+      // just-created empty test so a failed section insert cannot leave an orphan.
+      const cleanup=await sb.from('tests').delete().eq('id',t.id).eq('is_published',false);
+      if(cleanup.error)console.error('Test creation rollback failed:',cleanup.error);
+      createdTestId=null;
+      throw new Error(`Test record was created, but its ${m==='reading'?'Passage':'Section'} records could not be created. ${sectionError.message}${cleanup.error?' The empty test record may need admin cleanup.':''}`);
+    }
     openBuilder(t.id);
-  }catch(e){alert('Could not create test: '+(e.message||e))}
+  }catch(e){
+    console.error('Could not create test:',e);
+    alert('Could not create test: '+(e?.message||e));
+  }finally{
+    __ueTestCreateBusy=false;
+    if(submitButton){submitButton.disabled=false;submitButton.textContent=submitButton.dataset.originalText||'Create & Open Builder';delete submitButton.dataset.originalText;}
+  }
 }
 
 async function validateTest(id){
