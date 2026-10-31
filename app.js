@@ -752,7 +752,29 @@ async function manageStudent(id){
     <div class="actions" style="margin-top:12px"><button class="btn primary" onclick="saveStudent('${s.id}')">Save Student</button><button class="btn ${s.active?'warning':'success'}" onclick="toggleStudent('${s.id}',${!s.active})">${s.active?'Deactivate':'Activate'}</button></div>
   </div>${canStaff("tests")?`<div class="card"><h3>Assign Tests</h3><p class="muted">Only assigned + published tests can be taken by this student.</p><div class="grid3">${(tests||[]).map(t=>`<label style="display:flex;gap:8px;align-items:center;font-weight:600"><input type="checkbox" style="width:auto" id="access-${t.id}" ${amap.get(t.id)?"checked":""} onchange="setTestAccess('${id}','${t.id}',this.checked)"><span>${esc(t.title)} <small class="muted">(${esc(t.module)})</small></span></label>`).join("")||"No tests created yet."}</div></div>`:''}`);
 }
-async function saveStudent(id){if(!guardStaff('students'))return;const name=$("msName").value.trim(),code=normalizeStudentId($("msCode").value),pass=$("msPass").value;try{await edgeStudentAdmin({action:"update",id,full_name:name,student_code:code});if(pass){if(pass.length<8)throw new Error("Password must be at least 8 characters.");await edgeStudentAdmin({action:"reset_password",id,password:pass})}alert("Student updated.");manageStudent(id)}catch(e){alert(e.message)}}
+async function saveStudent(id){
+  if(!guardStaff('students'))return;
+  const name=String($("msName")?.value||"").trim();
+  const pass=String($("msPass")?.value||"");
+  if(!name)return alert("Student Name is required.");
+  if(pass && pass.length<8)return alert("Password must be at least 8 characters.");
+  try{
+    // The Manage Student form intentionally keeps Student ID read-only and has no msCode input.
+    // Do not send an empty/undefined Student ID to the API; update only the editable profile name.
+    const updateResult=await edgeStudentAdmin({action:"update",id,full_name:name});
+    if(pass){
+      await edgeStudentAdmin({action:"reset_password",id,password:pass});
+      $("msPass").value="";
+      alert("Student details saved and password reset successfully.");
+    }else{
+      alert("Student details saved successfully.");
+    }
+    await manageStudent(id);
+    return updateResult;
+  }catch(e){
+    alert("Could not save student: "+(e.message||e));
+  }
+}
 async function toggleStudent(id,active){if(!guardStaff('students'))return;try{await edgeStudentAdmin({action:"update",id,active});studentsPage()}catch(e){alert(e.message)}}
 async function setTestAccess(studentId,testId,allowed){if(!guardStaff('tests'))return;try{await edgeStudentAdmin({action:"set_test_access",student_id:studentId,test_id:testId,allowed})}catch(e){alert(e.message||e)}}
 async function deleteStudent(id,code){if(!guardStaff('students'))return;if(!confirm(`Delete Student ${code}? This permanently deletes the student account, assigned tests, attempts, answers and results.`))return;try{await edgeStudentAdmin({action:"delete",id});alert("Student and associated data deleted.");studentsPage()}catch(e){alert(e.message)}}
