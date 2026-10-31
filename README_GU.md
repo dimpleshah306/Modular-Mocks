@@ -31,3 +31,12 @@
 - Student/Faculty/Sub Admin/Main Admin live role testing.
 
 **આ ZIPને હમણાં Public GitHub Repositoryમાં upload અથવા deploy ન કરશો.** પહેલાં config, backend integration અને security tests પૂર્ણ થવા જોઈએ.
+
+
+## V16 Modern Dashboard UI update
+- Added a responsive collapsible left sidebar and modern top navigation.
+- Added role-aware navigation for Main Admin, Sub Admin / Faculty, and Student accounts.
+- Main Admin/Staff dashboard now has a welcome header, live summary counters, and permission-aware quick-access cards.
+- Existing V16 practice centre, assigned practice, practice history and assessment queue links are surfaced in navigation when permissions allow.
+- Existing test builder, exam set, result, overall score and student dashboard functions remain the page/workflow handlers.
+- This update changes the dashboard shell and landing screen; it does not claim to complete missing backend integrations, database migrations, or end-to-end testing.

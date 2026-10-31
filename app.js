@@ -346,10 +346,113 @@ async function loadAttemptAnswers(resultId){
 function loadExam(id,studentId=null,resultId=null){try{return JSON.parse(localStorage.getItem(examKey(id,studentId,resultId))||"null")}catch{return null}}
 function clearExam(id,studentId=null,resultId=null){localStorage.removeItem(examKey(id,studentId,resultId));localStorage.removeItem(legacyExamKey(id))}
 
+function v16RoleTitle(){
+  if(!currentProfile)return "Workspace";
+  if(currentProfile.role==="admin")return "Main Admin";
+  const p=currentProfile.permissions||{};
+  return ((p.students&&p.tests&&p.exam_sets)||(p.publish&&p.exam_sets&&p.results))?"Sub Admin":"Faculty";
+}
+function v16NavItems(){
+  if(currentProfile?.role==="student"){
+    return [
+      ["dashboard","⌂","My Dashboard","studentDashboard()"],
+      ["mock","▣","Mock Tests","studentDashboard()"],
+      ["self-practice","✦","Self Practice","v16StudentPracticeLibrary()"],
+      ["assigned-practice","✓","Assigned Practice","v16StudentAssignedPractice()"],
+      ["practice-history","◷","Practice History","v16StudentPracticeHistory()"],
+      ["overall","★","Overall Score","studentOverallResultsPage()"]
+    ];
+  }
+  const items=[["dashboard","⌂","Dashboard","staffDashboard()"]];
+  const add=(perm,item)=>{if(canStaff(perm))items.push(item)};
+  add("students",["students","♙","Students","studentsPage()"]);
+  if(isMainAdmin()||canStaff("staff_management"))items.push(["staff","♧","Staff Management","staffManagementPage()"]);
+  add("exam_sets",["examsets","▣","Mock / Exam Sets","examSetsPage()"]);
+  add("tests",["tests","▤","All Tests","testsPage('all')"]);
+  add("tests",["listening","◖","Listening","testsPage('listening')"]);
+  add("tests",["reading","▤","Reading","testsPage('reading')"]);
+  add("writing",["writing","✎","Writing","testsPage('writing')"]);
+  add("speaking",["speaking","◉","Speaking","testsPage('speaking')"]);
+  add("results",["results","▥","Module Results","resultsPage()"]);
+  add("overall",["overall","★","Overall Results","overallResultsPage()"]);
+  if(canStaff("practice"))items.push(["practice-library","✦","Practice Library","v16PracticeSetsPage()"]);
+  if(canStaff("assign_practice"))items.push(["assignments","✓","Practice Assignments","v16FacultyAssignmentsPage()"]);
+  if(canStaff("writing")||canStaff("speaking"))items.push(["assessments","◎","Assessment Queue","v16PracticeAssessmentQueue()"]);
+  return items;
+}
+function v16NavGo(key){
+  const student=currentProfile?.role==="student";
+  const actions={
+    dashboard:()=>student?studentDashboard():staffDashboard(),
+    mock:()=>student?studentDashboard():examSetsPage(),
+    students:()=>studentsPage(),
+    staff:()=>staffManagementPage(),
+    examsets:()=>examSetsPage(),
+    tests:()=>testsPage("all"),
+    listening:()=>testsPage("listening"),
+    reading:()=>testsPage("reading"),
+    writing:()=>testsPage("writing"),
+    speaking:()=>testsPage("speaking"),
+    results:()=>resultsPage(),
+    overall:()=>student?studentOverallResultsPage():overallResultsPage(),
+    "practice-library":()=>v16PracticeSetsPage(),
+    assignments:()=>v16FacultyAssignmentsPage(),
+    assessments:()=>v16PracticeAssessmentQueue(),
+    "self-practice":()=>v16StudentPracticeLibrary(),
+    "assigned-practice":()=>v16StudentAssignedPractice(),
+    "practice-history":()=>v16StudentPracticeHistory()
+  };
+  if(actions[key])actions[key]();
+}
+function v16ToggleSidebar(){
+  document.body.classList.toggle("ue-sidebar-collapsed");
+  try{localStorage.setItem("ue_v16_sidebar_collapsed",document.body.classList.contains("ue-sidebar-collapsed")?"1":"0")}catch(e){}
+}
 function shell(body, title="Universal Education IELTS", sub="Testing Platform"){
-  app().innerHTML=`<div class="topbar"><div><div class="brand">${esc(title)}</div><div class="subbrand">${esc(sub)}</div></div>
-  <div class="userbox">${currentProfile?`<span>${esc(currentProfile.full_name||"")} • ${esc(currentProfile.role||"")}</span><button class="btn secondary" onclick="logout()">Logout</button>`:""}</div></div>
-  <div class="shell">${body}</div>`;
+  const logged=!!currentProfile;
+  if(!logged){
+    app().innerHTML=`<div class="shell">${body}</div>`;
+    return;
+  }
+  const role=v16RoleTitle();
+  const items=v16NavItems();
+  const route=getRoute()||{};
+  const active=route.page==="student-dashboard"?"dashboard":(route.page||"dashboard");
+  const nav=items.map(([key,ico,label,action])=>`<button type="button" class="ue-nav-item ${active===key?"active":""}" onclick="v16NavGo('${key}')"><span class="ue-nav-icon">${ico}</span><span class="ue-nav-label">${label}</span></button>`).join("");
+  app().innerHTML=`
+    <div class="ue-app-shell">
+      <aside class="ue-sidebar" id="ueSidebar">
+        <div class="ue-brand">
+          <div class="ue-brand-mark">UE</div>
+          <div class="ue-brand-copy"><strong>Universal Education</strong><small>IELTS MANAGEMENT</small></div>
+          <button class="ue-collapse-btn" type="button" onclick="v16ToggleSidebar()" aria-label="Collapse sidebar">‹</button>
+        </div>
+        <div class="ue-workspace-label">WORKSPACE</div>
+        <nav class="ue-nav">${nav}</nav>
+        <div class="ue-sidebar-bottom">
+          <div class="ue-support-card"><span>●</span><div><strong>Learning workspace</strong><small>All modules in one place</small></div></div>
+          <button class="ue-nav-item" type="button" onclick="changeMyPassword()"><span class="ue-nav-icon">⚙</span><span class="ue-nav-label">Change Password</span></button>
+        </div>
+      </aside>
+      <div class="ue-main">
+        <header class="ue-topbar">
+          <div class="ue-topbar-left">
+            <button class="ue-mobile-menu" type="button" onclick="document.body.classList.toggle('ue-mobile-nav-open')" aria-label="Open menu">☰</button>
+            <div><div class="ue-page-eyebrow">UNIVERSAL EDUCATION / ${role.toUpperCase()}</div><div class="ue-page-context">${esc(sub||"IELTS Testing Platform")}</div></div>
+          </div>
+          <div class="ue-topbar-right">
+            <div class="ue-user-avatar">${esc((currentProfile.full_name||"U").trim().charAt(0).toUpperCase())}</div>
+            <div class="ue-user-meta"><strong>${esc(currentProfile.full_name||"User")}</strong><small>${role}</small></div>
+            <button class="ue-logout" type="button" onclick="logout()">Logout <span>↗</span></button>
+          </div>
+        </header>
+        <main class="ue-content">
+          <div class="ue-content-inner"><div class="shell">${body}</div></div>
+        </main>
+      </div>
+      <button class="ue-mobile-scrim" type="button" onclick="document.body.classList.remove('ue-mobile-nav-open')" aria-label="Close menu"></button>
+    </div>`;
+  try{if(localStorage.getItem("ue_v16_sidebar_collapsed")==="1")document.body.classList.add("ue-sidebar-collapsed")}catch(e){}
 }
 function messageBox(msg,type="notice"){return `<div class="${type}">${esc(msg)}</div>`}
 
@@ -392,7 +495,7 @@ async function login(e){
     if(error) throw error;
     const p=await getProfile(data.user.id); if(!p.active) throw new Error("Account inactive.");
     if(loginMode==="student"&&p.role!=="student") throw new Error("Use Student login.");
-    if(loginMode==="staff"&&!['admin','tutor'].includes(p.role)) throw new Error("Use Admin / Tutor login.");
+    if(loginMode==="staff"&&!['admin','tutor'].includes(p.role)) throw new Error("Use Admin / Sub Admin / Faculty login.");
     if(p.role!=="student"){
       const {data:permRows}=await sb.from("staff_permissions").select("permissions").eq("user_id",p.id).maybeSingle();
       p.permissions=permRows?.permissions||{};
@@ -432,7 +535,7 @@ async function edgeStudentAdmin(payload){
 
 const STAFF_PERMISSION_LABELS={
   students:"View / Manage Students", tests:"Create / Edit Tests", publish:"Publish / Unpublish Tests", exam_sets:"Manage IELTS Mocks / Assign Students",
-  results:"View Module Results", writing:"Writing Faculty Evaluation", speaking:"Speaking Faculty Assessment", overall:"View / Manage Overall Results"
+  results:"View Module Results", writing:"Writing Faculty Evaluation", speaking:"Speaking Faculty Assessment", overall:"View / Manage Overall Results", practice:"Manage Practice Library", assign_practice:"Assign Practice to Students"
 };
 function isMainAdmin(){return currentProfile?.role==='admin'}
 function canStaff(permission){return isMainAdmin() || !!currentProfile?.permissions?.[permission]}
@@ -499,19 +602,45 @@ async function deleteSubAdmin(id,name){if(!isMainAdmin())return alert('Only the 
 
 async function logout(){stopStudentListeningAudio();clearRoute();if(exam)clearExam(exam.testId,exam.studentId,exam.resultId);exam=null;currentProfile=null;await sb.auth.signOut();location.reload()}
 
-function staffDashboard(){
+async function staffDashboard(){
   setRoute("dashboard");
-  shell(`<h2>Admin Dashboard</h2><p class="muted">Create IELTS tests, manage students, publish exams and view results.</p>
-  <div class="dashboard-grid">
-    <button class="dashbtn" onclick="studentsPage()">👨‍🎓<strong>Students</strong><span class="muted">Manage student profiles</span></button>
-    <button class="dashbtn" onclick="testsPage('all')">📝<strong>All Tests</strong><span class="muted">Create / edit / publish</span></button>
-    <button class="dashbtn" onclick="testsPage('listening')">🎧<strong>Listening</strong><span class="muted">4 Parts • 40 Questions</span></button>
-    <button class="dashbtn" onclick="testsPage('reading')">📖<strong>Reading</strong><span class="muted">3 Passages • 40 Questions</span></button>
-    <button class="dashbtn" onclick="testsPage('writing')">✍️<strong>Writing</strong><span class="muted">Task 1 + Task 2</span></button>
-    <button class="dashbtn" onclick="testsPage('speaking')">🗣️<strong>Speaking</strong><span class="muted">Faculty Band Assessment</span></button>
-    <button class="dashbtn" onclick="resultsPage()">📊<strong>Results</strong><span class="muted">Module Results</span></button>
-    <button class="dashbtn" onclick="overallResultsPage()">🏆<strong>Overall Results</strong><span class="muted">4-module IELTS score</span></button>
-  </div>`);
+  const mainAdmin=isMainAdmin(), role=v16RoleTitle();
+  let studentCount="—",testCount="—",resultCount="—";
+  try{
+    const [st,ts,rs]=await Promise.all([
+      sb.from("profiles").select("id",{count:"exact",head:true}).eq("role","student"),
+      sb.from("tests").select("id",{count:"exact",head:true}),
+      sb.from("results").select("id",{count:"exact",head:true}).eq("status","submitted")
+    ]);
+    if(!st.error)studentCount=st.count??0;
+    if(!ts.error)testCount=ts.count??0;
+    if(!rs.error)resultCount=rs.count??0;
+  }catch(e){console.warn("Dashboard summary unavailable:",e.message)}
+  const card=(icon,title,desc,onclick,tag="Open")=>`<button class="ue-action-card" type="button" onclick="${onclick}"><span class="ue-action-icon">${icon}</span><span class="ue-action-copy"><strong>${title}</strong><small>${desc}</small></span><span class="ue-action-arrow">↗</span></button>`;
+  let cards="";
+  if(canStaff("students"))cards+=card("♙","Students","Manage student profiles and access","studentsPage()");
+  if(mainAdmin||canStaff("staff_management"))cards+=card("♧","Staff Management","Manage Sub Admins and permissions","staffManagementPage()");
+  if(canStaff("tests"))cards+=card("▣","Mock / Exam Sets","Combine all four IELTS modules","examSetsPage()");
+  if(canStaff("tests"))cards+=card("▤","Test Builder","Create, edit and publish module tests","testsPage('all')");
+  if(canStaff("listening"))cards+=card("◖","Listening","Sections 1–4 · 40 questions","testsPage('listening')");
+  if(canStaff("reading"))cards+=card("▤","Reading","Passages 1–3 · 40 questions","testsPage('reading')");
+  if(canStaff("writing"))cards+=card("✎","Writing","Task 1, Task 2 and faculty scoring","testsPage('writing')");
+  if(canStaff("speaking"))cards+=card("◉","Speaking","Speaking tests and faculty assessment","testsPage('speaking')");
+  if(canStaff("results"))cards+=card("▥","Module Results","Review individual module attempts","resultsPage()");
+  if(canStaff("overall_results"))cards+=card("★","Overall Results","Four-module IELTS band calculation","overallResultsPage()");
+  const subtitle=mainAdmin?"Monitor your IELTS platform and manage every workflow.":role==="Sub Admin"?"Manage the areas assigned to you by the Main Admin.":"Your assigned students, practice work and assessments are all in one place.";
+  shell(`<section class="ue-welcome">
+      <div><div class="ue-welcome-kicker">YOUR WORKSPACE</div><h1>Good day, ${esc((currentProfile?.full_name||"there").split(" ")[0])} <span>✦</span></h1><p>${subtitle}</p></div>
+      <div class="ue-welcome-art"><div class="ue-art-circle"></div><div class="ue-art-book">▤</div><div class="ue-art-cap">◆</div></div>
+    </section>
+    <section class="ue-stat-grid">
+      <div class="ue-stat-card"><span class="ue-stat-icon blue">♙</span><div><small>Total Students</small><strong>${studentCount}</strong><em>Student accounts</em></div></div>
+      <div class="ue-stat-card"><span class="ue-stat-icon violet">▤</span><div><small>Total Tests</small><strong>${testCount}</strong><em>All modules</em></div></div>
+      <div class="ue-stat-card"><span class="ue-stat-icon green">✓</span><div><small>Submitted Attempts</small><strong>${resultCount}</strong><em>Recorded submissions</em></div></div>
+      <div class="ue-stat-card"><span class="ue-stat-icon amber">◎</span><div><small>Your Access</small><strong>${mainAdmin?"Full":Object.values(currentProfile?.permissions||{}).filter(Boolean).length}</strong><em>${mainAdmin?"Main Admin":"Assigned permissions"}</em></div></div>
+    </section>
+    <section class="ue-section-head"><div><div class="ue-section-kicker">QUICK ACCESS</div><h2>${role} Tools</h2><p>Choose a workspace to continue.</p></div></section>
+    <section class="ue-action-grid">${cards||'<div class="ue-empty-state">No modules are currently assigned to this account. Contact the Main Admin.</div>'}</section>`);
 }
 
 async function studentsPage(){
@@ -2813,8 +2942,8 @@ window.overallResultDetails=overallResultDetails;
   const v16Status = s => `<span class="status ${s==='published'?'published':s==='submitted'?'published':'warning'}">${esc(s||'draft')}</span>`;
 
   const originalStaffDashboard = window.staffDashboard;
-  window.staffDashboard = function(){
-    originalStaffDashboard();
+  window.staffDashboard = async function(){
+    await originalStaffDashboard();
     const root = document.querySelector('.shell');
     if (!root || root.querySelector('#v16PracticeAdminCard')) return;
     const canPractice = typeof canStaff === 'function' && canStaff('practice');
