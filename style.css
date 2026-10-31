@@ -342,3 +342,42 @@ body{background:var(--ue-bg)}
   .ue-welcome h1{font-size:23px}
   .ue-action-grid{grid-template-columns:1fr}
 }
+
+
+/* V16.1.2 — Functional sidebar width toggle */
+.ue-collapse-btn{
+  display:grid;place-items:center;flex:0 0 30px;
+  width:30px;height:30px;border-radius:9px;
+  font-size:21px;font-weight:700;line-height:1;
+  transition:background .15s,border-color .15s,color .15s;
+}
+.ue-collapse-btn:hover{background:#edf3ff;border-color:#c9d9fb;color:#2457d6}
+.ue-sidebar-collapsed .ue-sidebar{
+  width:82px;flex-basis:82px;
+}
+.ue-sidebar-collapsed .ue-brand{
+  position:relative;justify-content:center;
+  padding-left:0;padding-right:0;
+}
+.ue-sidebar-collapsed .ue-brand-copy,
+.ue-sidebar-collapsed .ue-workspace-label,
+.ue-sidebar-collapsed .ue-nav-label,
+.ue-sidebar-collapsed .ue-support-card{display:none}
+.ue-sidebar-collapsed .ue-collapse-btn{
+  display:grid;position:absolute;right:-4px;top:8px;
+  z-index:2;width:25px;height:27px;
+  background:#fff;box-shadow:0 2px 7px #17243b18;
+  font-size:20px;
+}
+.ue-sidebar-collapsed .ue-nav-item{
+  justify-content:center;padding:12px 8px;
+}
+.ue-sidebar-collapsed .ue-nav-icon{
+  width:24px;flex-basis:24px;font-size:19px;
+}
+.ue-sidebar-collapsed .ue-sidebar-bottom .ue-nav-item{
+  justify-content:center;
+}
+@media(max-width:760px){
+  .ue-sidebar-collapsed .ue-sidebar{width:285px;flex-basis:285px}
+}

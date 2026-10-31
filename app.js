@@ -405,8 +405,14 @@ function v16NavGo(key){
   if(actions[key])actions[key]();
 }
 function v16ToggleSidebar(){
-  document.body.classList.toggle("ue-sidebar-collapsed");
-  try{localStorage.setItem("ue_v16_sidebar_collapsed",document.body.classList.contains("ue-sidebar-collapsed")?"1":"0")}catch(e){}
+  const collapsed=document.body.classList.toggle("ue-sidebar-collapsed");
+  const button=document.querySelector(".ue-collapse-btn");
+  if(button){
+    button.textContent=collapsed?"›":"‹";
+    button.setAttribute("aria-expanded",collapsed?"false":"true");
+    button.setAttribute("title",collapsed?"Expand sidebar":"Collapse sidebar");
+  }
+  try{localStorage.setItem("ue_v16_sidebar_collapsed",collapsed?"1":"0")}catch(e){}
 }
 function shell(body, title="Universal Education IELTS", sub="Testing Platform"){
   const logged=!!currentProfile;
@@ -418,7 +424,7 @@ function shell(body, title="Universal Education IELTS", sub="Testing Platform"){
   const items=v16NavItems();
   const route=getRoute()||{};
   const active=route.page==="student-dashboard"?"dashboard":(route.page||"dashboard");
-  const nav=items.map(([key,ico,label,action])=>`<button type="button" class="ue-nav-item ${active===key?"active":""}" onclick="v16NavGo('${key}')"><span class="ue-nav-icon">${ico}</span><span class="ue-nav-label">${label}</span></button>`).join("");
+  const nav=items.map(([key,ico,label,action])=>`<button type="button" class="ue-nav-item ${active===key?"active":""}" title="${label}" aria-label="${label}" onclick="v16NavGo('${key}')"><span class="ue-nav-icon">${ico}</span><span class="ue-nav-label">${label}</span></button>`).join("");
   app().innerHTML=`
     <div class="ue-app-shell">
       <aside class="ue-sidebar" id="ueSidebar">
@@ -452,8 +458,17 @@ function shell(body, title="Universal Education IELTS", sub="Testing Platform"){
       </div>
       <button class="ue-mobile-scrim" type="button" onclick="document.body.classList.remove('ue-mobile-nav-open')" aria-label="Close menu"></button>
     </div>`;
-  /* Sidebar opens expanded by default so every admin option is readable. */
-  document.body.classList.remove("ue-sidebar-collapsed");
+  /* Restore the user's last sidebar size; expanded is the first-visit default. */
+  try{
+    const collapsed=localStorage.getItem("ue_v16_sidebar_collapsed")==="1";
+    document.body.classList.toggle("ue-sidebar-collapsed",collapsed);
+    const toggle=document.querySelector(".ue-collapse-btn");
+    if(toggle){
+      toggle.textContent=collapsed?"›":"‹";
+      toggle.setAttribute("aria-expanded",collapsed?"false":"true");
+      toggle.setAttribute("title",collapsed?"Expand sidebar":"Collapse sidebar");
+    }
+  }catch(e){}
 }
 function messageBox(msg,type="notice"){return `<div class="${type}">${esc(msg)}</div>`}
 
