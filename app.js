@@ -1,6 +1,16 @@
-// UNIVERSAL EDUCATION IELTS — V14.0.4 CUMULATIVE ADMIN RECOVERY
-const SUPABASE_URL = "https://fmwcvwgcwisdxiudlstq.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_ibtCq2hamnZkRNWPsxlddQ_JfexwHYM";
+// UNIVERSAL EDUCATION IELTS — V16 FRONTEND FOUNDATION
+// IMPORTANT: Configure these with the NEW V16 Supabase Project URL and Publishable Key.
+// Never put a service_role/secret key in this file or in GitHub.
+const SUPABASE_URL = window.UE_V16_CONFIG?.SUPABASE_URL || "PASTE_V16_SUPABASE_PROJECT_URL_HERE";
+const SUPABASE_PUBLISHABLE_KEY = window.UE_V16_CONFIG?.SUPABASE_PUBLISHABLE_KEY || "PASTE_V16_SUPABASE_PUBLISHABLE_KEY_HERE";
+if (!window.supabase) throw new Error("Supabase JS library did not load.");
+if (SUPABASE_URL.includes("PASTE_") || SUPABASE_PUBLISHABLE_KEY.includes("PASTE_")) {
+  document.addEventListener("DOMContentLoaded", () => {
+    const root = document.getElementById("app");
+    if (root) root.innerHTML = `<main class="login-wrap"><section class="card login-card"><h1>Universal Education IELTS</h1><h2>V16 Setup Required</h2><p class="muted">Add the NEW V16 Supabase Project URL and Publishable Key to <strong>config.js</strong>. Do not use the V15 project credentials. Never use a service_role key in the frontend.</p></section></main>`;
+  });
+  throw new Error("V16 Supabase configuration is missing. Configure config.js before running the application.");
+}
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}
 });
@@ -377,21 +387,14 @@ async function login(e){
   try{
     const raw=$("loginId").value.trim();
     if(!raw) throw new Error(loginMode==="student"?"Enter Student ID.":"Enter username.");
-    const identifier=loginMode==="student"?normalizeStudentId(raw):normalizeStaffUsername(raw);
-    const valid=loginMode==="student"?/^[a-z0-9][a-z0-9._-]{2,49}$/.test(identifier):/^[a-z0-9][a-z0-9._-]{2,39}$/.test(identifier);
-    if(!valid) throw new Error(loginMode==="student"?"Invalid Student ID format.":"Invalid username format.");
-    const {data,error}=await sb.functions.invoke("identifier-login",{body:{kind:loginMode,identifier,password:$("password").value}});
-    if(error) throw new Error(error.message||"Login service unavailable.");
-    if(!data?.success||!data?.session) throw new Error(data?.error||"Invalid login credentials.");
-    const {data:sessionData,error:sessionError}=await sb.auth.setSession({access_token:data.session.access_token,refresh_token:data.session.refresh_token});
-    if(sessionError) throw sessionError;
-    const p=await getProfile(sessionData.session.user.id);
-    if(!p.active) throw new Error("Account inactive.");
+    const email=loginMode==="student" ? studentAuthEmail(raw) : staffAuthEmail(raw);
+    const {data,error}=await sb.auth.signInWithPassword({email,password:$("password").value});
+    if(error) throw error;
+    const p=await getProfile(data.user.id); if(!p.active) throw new Error("Account inactive.");
     if(loginMode==="student"&&p.role!=="student") throw new Error("Use Student login.");
-    if(loginMode==="staff"&&!['admin','sub_admin','faculty','tutor'].includes(p.role)) throw new Error("Use Staff login.");
+    if(loginMode==="staff"&&!['admin','tutor'].includes(p.role)) throw new Error("Use Admin / Tutor login.");
     if(p.role!=="student"){
-      const {data:permRows,error:permError}=await sb.from("staff_permissions").select("permissions").eq("user_id",p.id).maybeSingle();
-      if(permError) throw permError;
+      const {data:permRows}=await sb.from("staff_permissions").select("permissions").eq("user_id",p.id).maybeSingle();
       p.permissions=permRows?.permissions||{};
     }
     currentProfile=p; clearRoute(); p.role==="student"?studentDashboard():staffDashboard();
@@ -442,8 +445,8 @@ async function changeMyPassword(){
   if(next.length<6)return alert('Password must be at least 6 characters.');
   if(next!==confirmPass)return alert('New passwords do not match.');
   try{
-    const {data:verifyData,error:verifyError}=await sb.functions.invoke('identifier-login',{body:{kind:'staff',identifier:currentProfile.username,password:current}});
-    if(verifyError||!verifyData?.success)throw new Error('Current password is incorrect.');
+    const {error:verifyError}=await sb.auth.signInWithPassword({email:staffAuthEmail(currentProfile.username),password:current});
+    if(verifyError)throw new Error('Current password is incorrect.');
     const {error}=await sb.auth.updateUser({password:next});
     if(error)throw error;
     alert('Password changed successfully.');
@@ -458,7 +461,7 @@ async function staffManagementPage(){
   if(!guardStaff('staff_management') && !isMainAdmin())return;
   try{
     setRoute('staff-management');
-    const {data,error}=await sb.from('profiles').select('id,full_name,username,role,active,created_at').in('role',['admin','sub_admin','faculty','tutor']).order('created_at',{ascending:true});
+    const {data,error}=await sb.from('profiles').select('id,full_name,username,role,active,created_at').in('role',['admin','tutor']).order('created_at',{ascending:true});
     if(error)throw error;
     const rows=[];
     for(const u of (data||[])){
@@ -2654,7 +2657,7 @@ function staffDashboard(){
   if(canStaff('results'))results.push(`<button class="dashbtn" onclick="resultsPage()"><span style="font-size:24px">📊</span><strong>Module Results</strong><span class="muted">Individual attempts</span></button>`);
   if(canStaff('overall'))results.push(`<button class="dashbtn" onclick="overallResultsPage()"><span style="font-size:24px">🏆</span><strong>Overall Results</strong><span class="muted">Listening + Reading + Writing + Speaking</span></button>`);
   if(canStaff('speaking'))results.push(`<button class="dashbtn" onclick="overallResultsPage()"><span style="font-size:24px">🗣️</span><strong>Speaking Assessment</strong><span class="muted">Faculty score inside Overall Results</span></button>`);
-  shell(`<h2>${isMainAdmin()?'Main Admin':'Sub Admin'} Dashboard</h2><p class="muted">Logged in as <strong>${esc(currentProfile?.full_name||currentProfile?.username||'admin')}</strong> • ${isMainAdmin()?'Full access':'Permission-based access'}</p><div class="actions"><button class="btn secondary" onclick="changeMyPassword()">🔐 Change My Password</button></div><h3 style="margin-top:22px">👥 Setup</h3><div class="dashboard-grid">${setup.join('')||'<p class="muted">No setup permissions assigned.</p>'}</div><h3 style="margin-top:22px">📝 Test Builder</h3><div class="dashboard-grid">${tests.join('')||'<p class="muted">No test permissions assigned.</p>'}</div><h3 style="margin-top:22px">📊 Results</h3><div class="dashboard-grid">${results.join('')||'<p class="muted">No result permissions assigned.</p>'}</div>`);
+  shell(`<h2>${isMainAdmin()?'Main Admin':'Sub Admin'} Dashboard</h2><p class="muted">Logged in as <strong>${esc(currentProfile?.full_name||currentProfile?.email||'')}</strong> • ${isMainAdmin()?'Full access':'Permission-based access'}</p><div class="actions"><button class="btn secondary" onclick="changeMyPassword()">🔐 Change My Password</button></div><h3 style="margin-top:22px">👥 Setup</h3><div class="dashboard-grid">${setup.join('')||'<p class="muted">No setup permissions assigned.</p>'}</div><h3 style="margin-top:22px">📝 Test Builder</h3><div class="dashboard-grid">${tests.join('')||'<p class="muted">No test permissions assigned.</p>'}</div><h3 style="margin-top:22px">📊 Results</h3><div class="dashboard-grid">${results.join('')||'<p class="muted">No result permissions assigned.</p>'}</div>`);
 }
 
 async function studentDashboard(){
@@ -2795,3 +2798,179 @@ async function overallResultDetails(studentId,examSetId){
 }
 window.overallResultDetails=overallResultDetails;
 
+/* Universal Education IELTS V16.0 - Practice Centre additive module.
+   This file is appended to app.js in the V16 build; it uses the existing V15 auth/shell.
+   Practice records are stored in practice_* tables, never in official results. */
+(function(){
+  if (typeof STAFF_PERMISSION_LABELS === 'object') {
+    STAFF_PERMISSION_LABELS.practice = 'Manage / View Practice Library';
+    STAFF_PERMISSION_LABELS.assign_practice = 'Assign Practice and Faculty Work';
+  }
+
+  const v16Norm = v => String(v ?? '').trim().toLowerCase().replace(/\s+/g,' ');
+  const v16Json = (value, fallback) => { try { return JSON.parse(value || ''); } catch { return fallback; } };
+  const v16ModuleLabel = m => ({listening:'Listening',reading:'Reading',writing:'Writing',speaking:'Speaking'}[m] || m);
+  const v16Status = s => `<span class="status ${s==='published'?'published':s==='submitted'?'published':'warning'}">${esc(s||'draft')}</span>`;
+
+  const originalStaffDashboard = window.staffDashboard;
+  window.staffDashboard = function(){
+    originalStaffDashboard();
+    const root = document.querySelector('.shell');
+    if (!root || root.querySelector('#v16PracticeAdminCard')) return;
+    const canPractice = typeof canStaff === 'function' && canStaff('practice');
+    const canAssign = typeof canStaff === 'function' && canStaff('assign_practice');
+    if (!canPractice && !canAssign) return;
+    root.insertAdjacentHTML('beforeend', `<section id="v16PracticeAdminCard" class="v16-panel"><h3>📚 V16 Practice & Faculty Work</h3><div class="v16-action-grid">${canPractice?'<button class="dashbtn" onclick="v16PracticeSetsPage()"><strong>Practice Library</strong><span class="muted">Create, edit and publish module-wise practice sets</span></button>':''}${canAssign?'<button class="dashbtn" onclick="v16FacultyAssignmentsPage()"><strong>Practice Assignments</strong><span class="muted">Assign sets and manage faculty work</span></button>':''}${(canStaff('writing')||canStaff('speaking'))?'<button class="dashbtn" onclick="v16PracticeAssessmentQueue()"><strong>Practice Assessments</strong><span class="muted">Review Writing and Speaking practice</span></button>':''}</div></section>`);
+  };
+
+  const originalStudentDashboard = window.studentDashboard;
+  window.studentDashboard = async function(){
+    await originalStudentDashboard();
+    const root = document.querySelector('.shell');
+    if (!root || root.querySelector('#v16StudentPracticeCard')) return;
+    root.insertAdjacentHTML('beforeend', `<section id="v16StudentPracticeCard" class="v16-panel"><h3>📚 My Practice Centre</h3><div class="v16-action-grid"><button class="dashbtn" onclick="v16StudentPracticeLibrary()"><strong>Self Practice</strong><span class="muted">Choose a module and question type yourself</span></button><button class="dashbtn" onclick="v16StudentAssignedPractice()"><strong>Assigned Practice</strong><span class="muted">Practice assigned by your faculty</span></button><button class="dashbtn" onclick="v16StudentPracticeHistory()"><strong>Practice History</strong><span class="muted">Attempts, scores and accuracy</span></button></div></section>`);
+  };
+
+  window.v16PracticeSetsPage = async function(){
+    if (!(typeof canStaff==='function' && canStaff('practice'))) return alert('You do not have Practice Library permission.');
+    try {
+      setRoute('v16-practice-sets');
+      const {data,error}=await sb.from('practice_sets').select('*').order('updated_at',{ascending:false}); if(error) throw error;
+      const rows=(data||[]).map(s=>`<tr><td><strong>${esc(s.title)}</strong><br><small>${esc(v16ModuleLabel(s.module))} · ${esc(s.track)} · ${esc(s.question_type)}</small></td><td>${v16Status(s.is_published?'published':'draft')}</td><td>${Array.isArray(s.content?.questions)?s.content.questions.length:0}</td><td><button class="btn secondary" onclick="v16EditPracticeSet('${s.id}')">Edit</button> <button class="btn ${s.is_published?'warning':'success'}" onclick="v16TogglePracticeSet('${s.id}',${!s.is_published})">${s.is_published?'Unpublish':'Publish'}</button></td></tr>`).join('');
+      shell(`<div class="actions"><button class="btn secondary" onclick="staffDashboard()">← Dashboard</button><button class="btn primary" onclick="v16PracticeSetForm()">+ Create Practice Set</button></div><h2>V16 Practice Library</h2><p class="muted">Practice sets are separate from official Mock Test results.</p><div class="card table-wrap"><table><thead><tr><th>Practice Set</th><th>Status</th><th>Questions</th><th>Actions</th></tr></thead><tbody>${rows||'<tr><td colspan="4">No practice sets yet.</td></tr>'}</tbody></table></div>`);
+    } catch(e){alert('Could not load Practice Library: '+(e.message||e));}
+  };
+
+  window.v16PracticeSetForm = function(existing=null){
+    const s=existing||{};
+    shell(`<div class="actions"><button class="btn secondary" onclick="v16PracticeSetsPage()">← Practice Library</button></div><h2>${s.id?'Edit':'Create'} Practice Set</h2><div class="card"><div class="grid"><div><label>Practice Set Title</label><input id="v16psTitle" value="${attr(s.title||'')}" placeholder="e.g. Matching Headings Practice 01"></div><div><label>Module</label><select id="v16psModule"><option value="listening" ${s.module==='listening'?'selected':''}>Listening</option><option value="reading" ${s.module==='reading'?'selected':''}>Reading</option><option value="writing" ${s.module==='writing'?'selected':''}>Writing</option><option value="speaking" ${s.module==='speaking'?'selected':''}>Speaking</option></select></div><div><label>Track</label><select id="v16psTrack"><option value="any" ${!s.track||s.track==='any'?'selected':''}>Any</option><option value="academic" ${s.track==='academic'?'selected':''}>Academic</option><option value="general" ${s.track==='general'?'selected':''}>General Training</option></select></div><div><label>Practice Category</label><select id="v16psCategory"><option value="question_type" ${s.practice_category==='question_type'?'selected':''}>Question Type</option><option value="writing_pattern" ${s.practice_category==='writing_pattern'?'selected':''}>Writing Pattern</option><option value="speaking_part" ${s.practice_category==='speaking_part'?'selected':''}>Speaking Part</option><option value="module_test" ${s.practice_category==='module_test'?'selected':''}>Module Test</option></select></div><div><label>Question Type / Pattern</label><input id="v16psType" value="${attr(s.question_type||'general')}" placeholder="e.g. matching_headings"></div><div><label>Duration (minutes)</label><input id="v16psDuration" type="number" min="0" value="${attr(s.duration_minutes??'')}" placeholder="Optional"></div></div><label>Description / Instructions</label><textarea id="v16psDescription" rows="3">${esc(s.description||'')}</textarea><label>Questions JSON</label><textarea id="v16psContent" rows="12" spellcheck="false">${esc(JSON.stringify(s.content||{instructions:'',questions:[{id:'q1',type:'mcq',prompt:'Sample question',options:[{value:'A',label:'Option A'},{value:'B',label:'Option B'}]}]},null,2))}</textarea><label>Answer Key JSON (example: {"q1":"A"})</label><textarea id="v16psKey" rows="4" spellcheck="false">${esc(JSON.stringify(s.answer_key||{},null,2))}</textarea><label>Explanations JSON (optional)</label><textarea id="v16psExplanations" rows="3" spellcheck="false">${esc(JSON.stringify(s.explanations||{},null,2))}</textarea><div class="actions"><button class="btn primary" onclick="v16SavePracticeSet('${s.id||''}')">Save Practice Set</button></div><p class="muted">V16.0 foundation format supports JSON-defined content. Rich editors for all IELTS question types will be added and validated in the staged question-type rollout.</p></div>`);
+  };
+
+  window.v16EditPracticeSet = async function(id){const {data,error}=await sb.from('practice_sets').select('*').eq('id',id).single();if(error)return alert(error.message);v16PracticeSetForm(data);};
+  window.v16SavePracticeSet = async function(id=''){
+    try{
+      const content=JSON.parse($('v16psContent').value||'{}'),key=JSON.parse($('v16psKey').value||'{}'),explanations=JSON.parse($('v16psExplanations').value||'{}');
+      if(!Array.isArray(content.questions))throw new Error('Questions JSON must contain a questions array.');
+      const payload={title:$('v16psTitle').value.trim(),description:$('v16psDescription').value.trim(),module:$('v16psModule').value,track:$('v16psTrack').value,practice_category:$('v16psCategory').value,question_type:$('v16psType').value.trim()||'general',duration_minutes:$('v16psDuration').value?Number($('v16psDuration').value):null,content,answer_key:key,explanations,updated_at:new Date().toISOString()};
+      if(!payload.title)throw new Error('Enter a Practice Set title.');
+      const user=(await sb.auth.getUser()).data.user;payload.updated_by=user.id;
+      let q;if(id)q=await sb.from('practice_sets').update(payload).eq('id',id);else q=await sb.from('practice_sets').insert({...payload,created_by:user.id});
+      if(q.error)throw q.error;await sb.from('ue_audit_logs').insert({actor_id:user.id,action:id?'practice_set_updated':'practice_set_created',entity_type:'practice_set',entity_id:id||null,details:{title:payload.title,module:payload.module,track:payload.track,question_type:payload.question_type}});alert('Practice Set saved.');v16PracticeSetsPage();
+    }catch(e){alert('Could not save Practice Set: '+(e.message||e));}
+  };
+  window.v16TogglePracticeSet = async function(id,publish){try{const q=await sb.from('practice_sets').update({is_published:publish,updated_at:new Date().toISOString()}).eq('id',id);if(q.error)throw q.error;v16PracticeSetsPage();}catch(e){alert('Could not update status: '+e.message)}};
+
+  window.v16StudentPracticeLibrary = async function(){
+    try{
+      const {data,error}=await sb.from('practice_sets').select('id,title,description,module,track,practice_category,question_type,duration_minutes,content').eq('is_published',true).eq('allow_self_practice',true).order('module').order('title');if(error)throw error;
+      const cards=(data||[]).map(s=>`<div class="card"><h3>${esc(s.title)}</h3><p class="muted">${esc(v16ModuleLabel(s.module))} · ${esc(s.track)} · ${esc(s.question_type)}</p><p>${esc(s.description||'')}</p><button class="btn primary" onclick="v16StartPractice('${s.id}','self')">Start Practice</button></div>`).join('');
+      shell(`<div class="actions"><button class="btn secondary" onclick="studentDashboard()">← Dashboard</button></div><h2>Self Practice Library</h2><div class="v16-list">${cards||'<div class="card">No published self-practice sets are available yet.</div>'}</div>`);
+    }catch(e){alert('Could not load Self Practice: '+e.message)}
+  };
+  window.v16StudentAssignedPractice = async function(){
+    try{
+      const user=(await sb.auth.getUser()).data.user;
+      const {data,error}=await sb.from('practice_assignments').select('id,practice_set_id,due_at,instructions,status,practice_sets(id,title,module,track,question_type,description)').eq('student_id',user.id).neq('status','cancelled').order('due_at');if(error)throw error;
+      const cards=(data||[]).map(a=>`<div class="card"><h3>${esc(a.practice_sets?.title||'Practice Set')}</h3><p class="muted">${esc(v16ModuleLabel(a.practice_sets?.module))} · Due: ${a.due_at?new Date(a.due_at).toLocaleString():'No due date'} · ${esc(a.status)}</p><p>${esc(a.instructions||'')}</p><button class="btn primary" onclick="v16StartPractice('${a.practice_set_id}','assigned','${a.id}')">Start Assigned Practice</button></div>`).join('');
+      shell(`<div class="actions"><button class="btn secondary" onclick="studentDashboard()">← Dashboard</button></div><h2>Assigned Practice</h2><div class="v16-list">${cards||'<div class="card">No Practice has been assigned to you.</div>'}</div>`);
+    }catch(e){alert('Could not load Assigned Practice: '+e.message)}
+  };
+
+  window.v16StartPractice = async function(setId,source='self',assignmentId=null){
+    try{
+      const {data:set,error}=await sb.from('practice_sets').select('id,title,description,module,track,practice_category,question_type,duration_minutes,content,is_published,allow_self_practice').eq('id',setId).single();if(error)throw error;
+      if(source==='self'&&!set.allow_self_practice)throw new Error('This set is available only when assigned by Faculty.');
+      const user=(await sb.auth.getUser()).data.user;
+      const {data:prior,error:pe}=await sb.from('practice_attempts').select('attempt_number').eq('practice_set_id',setId).eq('student_id',user.id).order('attempt_number',{ascending:false}).limit(1);if(pe)throw pe;
+      const {data:attempt,error:ae}=await sb.from('practice_attempts').insert({practice_set_id:setId,student_id:user.id,assignment_id:assignmentId,attempt_source:source,attempt_number:(prior?.[0]?.attempt_number||0)+1,status:'in_progress'}).select('*').single();if(ae)throw ae;
+      v16RenderPracticeRunner(set,attempt);
+    }catch(e){alert('Could not start Practice: '+(e.message||e))}
+  };
+  function v16RenderPracticeRunner(set,attempt){
+    const qs=set.content?.questions||[];
+    let body='';
+    if(set.module==='writing'){
+      body=`<div class="card"><h3>Writing Task</h3><div class="student-rich">${esc(set.content?.prompt||set.description||'Read the task instructions carefully.')}</div><label>Your Response</label><textarea id="v16WritingResponse" rows="18" placeholder="Write your response here..."></textarea><p class="muted" id="v16WritingWords">0 words</p></div>`;
+    } else if(set.module==='speaking'){
+      body=`<div class="card"><h3>Speaking Practice</h3><p>${esc(set.content?.prompt||set.description||'Follow the speaking task instructions.')}</p><p class="muted">Speaking recording and playback integration is part of the next V16 integration milestone. This foundation build does not yet capture or upload audio.</p></div>`;
+    } else {
+      body=qs.map((q,i)=>{const id=String(q.id||`q${i+1}`);let control='';if(Array.isArray(q.options)&&q.options.length){control=q.options.map(o=>`<label class="v16-option"><input type="radio" name="v16_${attr(id)}" value="${attr(o.value)}"> ${esc(o.label||o.value)}</label>`).join('')}else{control=`<input class="v16-answer" data-qid="${attr(id)}" type="text" placeholder="Your answer">`}return `<div class="card v16-question"><strong>Q${i+1}. ${esc(q.prompt||q.question||'')}</strong><div class="v16-controls" data-question="${attr(id)}">${control}</div></div>`}).join('');
+    }
+    shell(`<div class="actions"><button class="btn secondary" onclick="${attempt.attempt_source==='assigned'?'v16StudentAssignedPractice()':'v16StudentPracticeLibrary()'}">← Back</button></div><h2>${esc(set.title)}</h2><p class="muted">${esc(v16ModuleLabel(set.module))} · ${esc(set.track)} · Practice Attempt ${attempt.attempt_number}</p><div class="v16-practice-paper">${esc(set.content?.instructions||'')} ${body||'<div class="card">This Practice Set has no questions yet.</div>'}</div><div class="actions"><button class="btn success" onclick="v16SubmitPractice('${attempt.id}','${set.id}')">Submit Practice</button></div>`);
+    if(set.module==='writing'){
+      const ta=$('v16WritingResponse'),wc=$('v16WritingWords');ta?.addEventListener('input',()=>{const n=ta.value.trim()?ta.value.trim().split(/\s+/).length:0;if(wc)wc.textContent=n+' words'});
+    }
+  }
+  window.v16SubmitPractice = async function(attemptId,setId){
+    try{
+      const {data:set,error:se}=await sb.from('practice_sets').select('id,module,content').eq('id',setId).single();
+      if(se)throw se;
+      const answers={};
+      if(set.module==='writing'){
+        answers.response=$('v16WritingResponse')?.value||'';
+        if(!answers.response.trim())throw new Error('Please write your response before submitting.');
+      } else if(set.module==='speaking'){
+        throw new Error('Speaking recording upload is not enabled in this frontend checkpoint. Do not submit until the secure recording workflow is installed.');
+      } else {
+        document.querySelectorAll('.v16-controls').forEach(el=>{
+          const id=el.dataset.question;
+          const checked=el.querySelector('input[type=radio]:checked');
+          const text=el.querySelector('input[type=text]');
+          answers[id]=checked?checked.value:(text?.value||'').trim();
+        });
+      }
+      // All grading and final status writes must happen in a trusted Edge Function.
+      // The browser must never fetch answer_key or calculate official practice scores.
+      const {data:result,error}=await sb.functions.invoke('submit-practice-attempt',{
+        body:{attempt_id:attemptId,practice_set_id:setId,answers}
+      });
+      if(error)throw new Error('Secure submission service is not deployed yet. Your attempt has not been submitted. '+(error.message||''));
+      shell(`<div class="card v16-score"><h2>Practice Submitted</h2><p>${esc(result?.message||'Your practice attempt was received by the secure assessment service.')}</p><h3>${result?.status==='evaluated'?'Result Available':'TEST IN REVIEW'}</h3><p class="muted">Practice scores remain separate from your Official Mock Test Overall Band.</p><button class="btn primary" onclick="v16StudentPracticeHistory()">View Practice History</button></div>`);
+    }catch(e){alert('Could not submit Practice: '+(e.message||e))}
+  };
+
+  window.v16StudentPracticeHistory = async function(){
+    try{const user=(await sb.auth.getUser()).data.user;const {data,error}=await sb.from('practice_attempts').select('id,attempt_source,attempt_number,status,raw_score,total_questions,accuracy,created_at,practice_sets(title,module,track,question_type)').eq('student_id',user.id).order('created_at',{ascending:false});if(error)throw error;const rows=(data||[]).map(a=>`<tr><td>${esc(a.practice_sets?.title||'Practice')}</td><td>${esc(a.attempt_source)}</td><td>${esc(a.status)}</td><td>${a.raw_score??'—'} / ${a.total_questions??'—'}</td><td>${a.accuracy==null?'—':Number(a.accuracy).toFixed(1)+'%'}</td><td>${new Date(a.created_at).toLocaleString()}</td></tr>`).join('');shell(`<div class="actions"><button class="btn secondary" onclick="studentDashboard()">← Dashboard</button></div><h2>My Practice History</h2><div class="card table-wrap"><table><thead><tr><th>Practice Set</th><th>Source</th><th>Status</th><th>Score</th><th>Accuracy</th><th>Date</th></tr></thead><tbody>${rows||'<tr><td colspan="6">No Practice attempts yet.</td></tr>'}</tbody></table></div>`)}catch(e){alert('Could not load Practice History: '+e.message)}
+  };
+
+  window.v16FacultyAssignmentsPage = async function(){
+    if (!(typeof canStaff==='function' && (canStaff('assign_practice')||canStaff('practice')))) return alert('You do not have assignment permission.');
+    try{
+      const [sets,students,faculty,assignments]=await Promise.all([
+        sb.from('practice_sets').select('id,title,module,track').order('title'),
+        sb.from('profiles').select('id,full_name,student_code').eq('role','student').eq('active',true).order('full_name'),
+        sb.from('profiles').select('id,full_name,username').in('role',['tutor','faculty']).eq('active',true).order('full_name'),
+        sb.from('practice_assignments').select('id,status,due_at,instructions,student:profiles!practice_assignments_student_id_fkey(full_name,student_code),practice_sets(title,module)').order('created_at',{ascending:false}).limit(100)
+      ]);for(const r of [sets,students,faculty,assignments])if(r.error)throw r.error;
+      const setOpts=(sets.data||[]).map(s=>`<option value="${s.id}">${esc(s.title)} (${esc(s.module)})</option>`).join('');
+      const studentOpts=(students.data||[]).map(s=>`<option value="${s.id}">${esc(s.full_name)} — ${esc(s.student_code||'')}</option>`).join('');
+      const facultyOpts=(faculty.data||[]).map(f=>`<option value="${f.id}">${esc(f.full_name)} — ${esc(f.username||'')}</option>`).join('');
+      const rows=(assignments.data||[]).map(a=>`<tr><td>${esc(a.student?.full_name||'Student')} (${esc(a.student?.student_code||'')})</td><td>${esc(a.practice_sets?.title||'')}</td><td>${esc(a.status)}</td><td>${a.due_at?new Date(a.due_at).toLocaleString():'—'}</td></tr>`).join('');
+      shell(`<div class="actions"><button class="btn secondary" onclick="staffDashboard()">← Dashboard</button></div><h2>Assign Practice</h2><div class="card"><div class="grid"><div><label>Student</label><select id="v16AssignStudent">${studentOpts}</select></div><div><label>Practice Set</label><select id="v16AssignSet">${setOpts}</select></div><div><label>Assigned Faculty</label><select id="v16AssignFaculty"><option value="">Assign to me</option>${facultyOpts}</select></div><div><label>Due Date</label><input id="v16AssignDue" type="datetime-local"></div></div><label>Instructions</label><textarea id="v16AssignInstructions" rows="2"></textarea><button class="btn primary" onclick="v16CreateAssignment()">Assign Practice</button></div><h3>Recent Assignments</h3><div class="card table-wrap"><table><thead><tr><th>Student</th><th>Practice Set</th><th>Status</th><th>Due</th></tr></thead><tbody>${rows||'<tr><td colspan="4">No assignments yet.</td></tr>'}</tbody></table></div>`);
+    }catch(e){alert('Could not load assignments: '+(e.message||e))}
+  };
+  window.v16CreateAssignment = async function(){try{const user=(await sb.auth.getUser()).data.user;const payload={student_id:$('v16AssignStudent').value,practice_set_id:$('v16AssignSet').value,faculty_id:$('v16AssignFaculty').value||user.id,assigned_by:user.id,due_at:$('v16AssignDue').value?new Date($('v16AssignDue').value).toISOString():null,instructions:$('v16AssignInstructions').value.trim()};const ins=await sb.from('practice_assignments').insert(payload).select('id').single();if(ins.error)throw ins.error;await sb.from('ue_notifications').insert({recipient_id:payload.student_id,title:'New Practice Assigned',message:'A new IELTS Practice Set has been assigned to you.',notification_type:'practice_assignment',target_path:'practice'});await sb.from('ue_audit_logs').insert({actor_id:user.id,action:'practice_assigned',entity_type:'practice_assignment',entity_id:ins.data.id,details:{practice_set_id:payload.practice_set_id,student_id:payload.student_id,faculty_id:payload.faculty_id}});alert('Practice assigned successfully.');v16FacultyAssignmentsPage()}catch(e){alert('Could not assign Practice: '+(e.message||e))}};
+
+  window.v16PracticeAssessmentQueue = async function(){
+    if(!(canStaff('writing')||canStaff('speaking')))return alert('You do not have assessment permission.');
+    try{
+      const {data,error}=await sb.from('practice_assessments').select('id,status,practice_attempt_id,practice_attempts(id,student_id,answers,created_at,practice_sets(title,module,track,writing_pattern))').eq('status','pending').order('created_at',{ascending:true});if(error)throw error;
+      const rows=[];
+      for(const a of data||[]){const at=a.practice_attempts;if(!at)continue;const p=await sb.from('profiles').select('full_name,student_code').eq('id',at.student_id).maybeSingle();rows.push(`<tr><td>${esc(p.data?.full_name||'Student')} (${esc(p.data?.student_code||'')})</td><td>${esc(at.practice_sets?.title||'Practice')}</td><td>${esc(at.practice_sets?.module||'')}</td><td><button class="btn primary" onclick="v16OpenPracticeAssessment('${a.id}')">Review</button></td></tr>`)}
+      shell(`<div class="actions"><button class="btn secondary" onclick="staffDashboard()">← Dashboard</button></div><h2>Pending Practice Assessments</h2><div class="card table-wrap"><table><thead><tr><th>Student</th><th>Practice</th><th>Module</th><th>Action</th></tr></thead><tbody>${rows.join('')||'<tr><td colspan="4">No pending Writing/Speaking Practice assessments.</td></tr>'}</tbody></table></div>`);
+    }catch(e){alert('Could not load assessment queue: '+(e.message||e))}
+  };
+  window.v16OpenPracticeAssessment = async function(id){
+    try{
+      const {data:a,error}=await sb.from('practice_assessments').select('*,practice_attempts(id,student_id,answers,practice_sets(title,module,content))').eq('id',id).single();if(error)throw error;
+      const at=a.practice_attempts,p=await sb.from('profiles').select('full_name,student_code').eq('id',at.student_id).maybeSingle();
+      const writing=at.practice_sets?.module==='writing',criteria=writing?['task_response','coherence_cohesion','lexical_resource','grammar']:['fluency_coherence','lexical_resource','grammar','pronunciation'];
+      const labels=writing?['Task Achievement / Task Response','Coherence & Cohesion','Lexical Resource','Grammatical Range & Accuracy']:['Fluency & Coherence','Lexical Resource','Grammatical Range & Accuracy','Pronunciation'];
+      const response=at.answers?.response||'';
+      shell(`<div class="actions"><button class="btn secondary" onclick="v16PracticeAssessmentQueue()">← Assessment Queue</button></div><h2>Practice Assessment – ${esc(at.practice_sets?.title||'')}</h2><p class="muted">${esc(p.data?.full_name||'Student')} · ${esc(p.data?.student_code||'')}</p><div class="card"><h3>Student Submission</h3><div class="writing-review">${esc(response||'Speaking practice: audio workflow pending integration.')}</div></div><div class="card"><h3>Faculty Assessment</h3><div class="grid">${criteria.map((k,i)=>`<div><label>${labels[i]}</label><input id="v16crit_${k}" type="number" min="0" max="9" step="0.5" value="${a.criteria?.[k]??''}"></div>`).join('')}</div><label>Final Band</label><input id="v16FinalBand" type="number" min="0" max="9" step="0.5" value="${a.final_band??''}"><label>Feedback</label><textarea id="v16AssessmentFeedback" rows="5">${esc(a.feedback||'')}</textarea><button class="btn primary" onclick="v16SavePracticeAssessment('${id}','${at.id}',${JSON.stringify(criteria).replace(/"/g,'&quot;')})">Save Assessment</button></div>`);
+    }catch(e){alert('Could not open assessment: '+(e.message||e))}
+  };
+  window.v16SavePracticeAssessment = async function(id,attemptId,criteria){
+    try{const values={};for(const k of criteria){const v=Number($('v16crit_'+k).value);if(!Number.isFinite(v)||v<0||v>9||Math.round(v*2)!==v*2)throw new Error('Each criterion must be a band from 0 to 9 in 0.5 steps.');values[k]=v}const band=Number($('v16FinalBand').value);if(!Number.isFinite(band)||band<0||band>9||Math.round(band*2)!==band*2)throw new Error('Enter a final band from 0 to 9 in 0.5 steps.');const user=(await sb.auth.getUser()).data.user;const up=await sb.from('practice_assessments').update({criteria:values,final_band:band,feedback:$('v16AssessmentFeedback').value.trim(),assessor_id:user.id,status:'evaluated',assessed_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq('id',id);if(up.error)throw up.error;const at=await sb.from('practice_attempts').update({status:'evaluated',updated_at:new Date().toISOString()}).eq('id',attemptId);if(at.error)throw at.error;alert('Practice assessment saved.');v16PracticeAssessmentQueue()}catch(e){alert('Could not save assessment: '+(e.message||e))}
+  };
+})();

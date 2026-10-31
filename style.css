@@ -160,3 +160,7 @@ table thead th{background:#f8fafc;color:#334155;font-size:12px;text-transform:up
 .status{white-space:nowrap}
 @media(max-width:720px){.topbar{padding:12px 14px;align-items:flex-start;flex-direction:column}.shell{padding:12px}.card{padding:15px}.actions>.btn{max-width:100%}.table-wrap table{min-width:680px}.login-card{padding:20px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
+
+/* V16.0 Practice Centre - additive styles */
+.v16-panel{margin-top:24px;padding:18px;border:1px solid #dbe3ef;border-radius:16px;background:#fff;box-shadow:0 5px 20px rgba(15,23,42,.04)}
+.v16-panel h3{margin:0 0 14px}.v16-action-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}.v16-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.v16-question{margin:14px 0}.v16-controls{display:flex;flex-direction:column;gap:9px;margin-top:12px}.v16-option{display:flex;align-items:center;gap:9px;padding:9px 12px;border:1px solid #dbe3ef;border-radius:9px;background:#f8fafc}.v16-option input{width:auto}.v16-practice-paper{max-width:980px;margin:0 auto}.v16-score{text-align:center;max-width:620px;margin:25px auto;padding:30px}.v16-score-number{font-size:48px;font-weight:800;color:#1d4ed8}.v16-practice-paper .v16-question{line-height:1.65}@media(max-width:650px){.v16-panel{padding:13px}.v16-action-grid,.v16-list{grid-template-columns:1fr}}
