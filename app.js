@@ -2275,24 +2275,7 @@ async function newExamSetForm(existingId=null){
   }catch(e){alert('Could not open Exam Set form: '+(e.message||e))}
 }
 function v13SelectAllStudents(on){document.querySelectorAll('.esStudent').forEach(x=>x.checked=!!on)}
-async function saveExamSet(id=''){
-  if(!guardStaff('exam_sets'))return;
-  try{
-    const title=$('esTitle').value.trim(),description=$('esDesc').value.trim();if(!title)throw new Error('Enter an Exam / Mock name.');
-    const modules=['listening','reading','writing','speaking'].map(m=>({module:m,test_id:$('esTest_'+m)?.value||null})).filter(x=>x.test_id);
-    if(modules.length!==4)throw new Error('An IELTS Exam Set must contain exactly one Listening, Reading, Writing and Speaking test.');
-    const studentIds=[...document.querySelectorAll('.esStudent:checked')].map(x=>x.value);if(!studentIds.length)throw new Error('Assign at least one student.');
-    const uid=(await sb.auth.getUser()).data.user?.id;if(!uid)throw new Error('Faculty session expired.');
-    let setId=id;
-    if(id){const u=await sb.from('exam_sets').update({title,description,updated_at:new Date().toISOString()}).eq('id',id);if(u.error)throw u.error;await sb.from('exam_set_modules').delete().eq('exam_set_id',id);await sb.from('student_exam_sets').delete().eq('exam_set_id',id)}
-    else{const c=await sb.from('exam_sets').insert({title,description,created_by:uid,is_published:false}).select('id').single();if(c.error)throw c.error;setId=c.data.id}
-    const mr=await sb.from('exam_set_modules').insert(modules.map(x=>({exam_set_id:setId,module:x.module,test_id:x.test_id})));if(mr.error)throw mr.error;
-    const ar=await sb.from('student_exam_sets').insert(studentIds.map(student_id=>({exam_set_id:setId,student_id})));if(ar.error)throw ar.error;
-    // Keep legacy per-test access synchronized so existing student-test security remains compatible.
-    for(const m of modules)for(const student_id of studentIds){const r=await sb.from('student_test_access').upsert({student_id,test_id:m.test_id,allowed:true},{onConflict:'student_id,test_id'});if(r.error)throw r.error}
-    alert(`Exam Set ${id?'updated':'created'} successfully.`);examSetsPage();
-  }catch(e){alert('Could not save Exam Set: '+(e.message||e))}
-}
+
 async function editExamSet(id){return newExamSetForm(id)}
 async function toggleExamSet(id,val){if(!guardStaff('exam_sets'))return;try{if(val){const es=await v13GetExamSet(id);const mods=['listening','reading','writing','speaking'];if(es.modules.length!==4||mods.some(m=>!es.modules.some(x=>x.module===m)))throw new Error('Exam Set must contain exactly one Listening, Reading, Writing and Speaking test before publishing.');if(es.tests.some(t=>!t.is_published))throw new Error('All four module tests must be published before publishing this Exam Set.');}const {error}=await sb.from('exam_sets').update({is_published:val,updated_at:new Date().toISOString()}).eq('id',id);if(error)throw error;examSetsPage()}catch(e){alert('Could not change Exam Set status: '+(e.message||e))}}
 async function deleteExamSet(id){if(!guardStaff('exam_sets'))return;if(!confirm('Delete this Exam Set? Individual test definitions and existing student attempts will NOT be deleted.'))return;const {error}=await sb.from('exam_sets').delete().eq('id',id);if(error)alert(error.message);else examSetsPage()}
@@ -2735,7 +2718,15 @@ async function saveExamSet(id=''){
     const uid=(await sb.auth.getUser()).data.user?.id;if(!uid)throw new Error('Staff session expired.');let setId=id;
     if(id){const u=await sb.from('exam_sets').update({title,description,updated_at:new Date().toISOString()}).eq('id',id);if(u.error)throw u.error;await sb.from('exam_set_modules').delete().eq('exam_set_id',id);await sb.from('student_exam_sets').delete().eq('exam_set_id',id)}
     else{const c=await sb.from('exam_sets').insert({title,description,created_by:uid,is_published:false}).select('id').single();if(c.error)throw c.error;setId=c.data.id}
-    const mr=await sb.from('exam_set_modules').insert(modules.map(x=>({exam_set_id:setId,module:x.module,test_id:x.test_id})));if(mr.error)throw mr.error;
+    const mr=await sb.from('exam_set_modules').insert(
+      modules.map((x, i) => ({
+        exam_set_id: setId,
+        module: x.module,
+        test_id: x.test_id,
+        sort_order: i + 1
+      }))
+    );
+    if(mr.error)throw mr.error;
     const ar=await sb.from('student_exam_sets').insert(studentIds.map(student_id=>({exam_set_id:setId,student_id})));if(ar.error)throw ar.error;
     for(const m of modules)for(const student_id of studentIds){const r=await sb.from('student_test_access').upsert({student_id,test_id:m.test_id,allowed:true},{onConflict:'student_id,test_id'});if(r.error)throw r.error;}
     alert(`Mock ${id?'updated':'created'} successfully.`);examSetsPage();
